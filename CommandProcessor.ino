@@ -58,7 +58,7 @@ void commandProcessor(String& command) {
     addWrappedHistoryLine("> " + entered);   //echo the command into the terminal history
 
     if (parts[0] == "help") {
-        addWrappedHistoryLine("Commands: help, clear, wifi, ls");
+        addWrappedHistoryLine("Commands: help, clear, wifi, ls, usb, ping");
         return;
     }
     if (parts[0] == "wifi") {
@@ -66,6 +66,14 @@ void commandProcessor(String& command) {
         handleWifiCommand(parts, partCount);
         return;
 
+    }
+    if (parts[0] == "ping") {
+        handlePingCommand(parts, partCount);
+        return;
+    }
+    if (parts[0] == "usb") {
+        handleUsbCommand(parts, partCount);
+        return;
     }
     if (parts[0] == "ls") {
         handleLsCommand(parts, partCount);
