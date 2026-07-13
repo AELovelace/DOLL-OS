@@ -3,6 +3,7 @@
 
 #include <M5Cardputer.h>
 #include <WiFi.h>
+#include <FS.h>
 #include "config.h"
 #include "global.h"
 
@@ -30,6 +31,9 @@
   commandBarSprite.setColorDepth(16);
   commandBarSprite.createSprite(M5Cardputer.Display.width(), COMMAND_BAR_HEIGHT);   //full width, fixed command bar height
   commandBarSprite.setTextColor(WHITE,BLACK);
+
+  //mount internal flash (LittleFS) and the SD card
+  initStorage();
 }
 
 void loop() {

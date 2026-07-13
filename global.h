@@ -14,6 +14,9 @@ const int COMMAND_BAR_HEIGHT = 24;       //pixel height of the command bar at th
 const int COMMAND_BAR_PADDING = 4;       //pixel padding inside the command bar
 LGFX_Sprite commandBarSprite(&M5Cardputer.Display);   //offscreen buffer the command bar gets drawn to before pushing
 
+//storage
+bool sdCardMounted = false;   //true once SD.begin() succeeds in initStorage()
+
 //status bar
 const int STATUS_BAR_HEIGHT = 14;   //pixel height of the top status bar
 LGFX_Sprite statusBarSprite(&M5Cardputer.Display);   //offscreen buffer the status bar gets drawn to before pushing

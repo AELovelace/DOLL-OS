@@ -58,12 +58,17 @@ void commandProcessor(String& command) {
     addWrappedHistoryLine("> " + entered);   //echo the command into the terminal history
 
     if (parts[0] == "help") {
-        addWrappedHistoryLine("Commands: help, clear");
+        addWrappedHistoryLine("Commands: help, clear, wifi, ls");
         return;
-    } 
+    }
     if (parts[0] == "wifi") {
         // Run the Wi-Fi scanner.
         handleWifiCommand(parts, partCount);
+        return;
+
+    }
+    if (parts[0] == "ls") {
+        handleLsCommand(parts, partCount);
         return;
 
     } else {                                          //fallback for anything not recognized above
