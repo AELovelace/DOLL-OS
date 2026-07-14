@@ -1,6 +1,6 @@
 //   ping.ino
 //   handles the "ping" command, sends ICMP echo requests over the current WiFi connection
-
+// vibe coded stub
 #include <ESP32Ping.h>
 
 //handles the "ping" command
@@ -11,6 +11,11 @@
 void handlePingCommand(const String parts[], int partCount) {
     if (partCount < 2) {
         addWrappedHistoryLine("Usage: ping <address> <count>");
+        return;
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+        addWrappedHistoryLine("ping: WiFi not connected. Run 'wifi connect' first.", RED);
         return;
     }
 

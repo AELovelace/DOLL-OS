@@ -1,6 +1,6 @@
 //   terminal.ino
 //   handles system-related features for DollOS
-
+//my proudest achievement
 //status bar management
 void statusManagement(){
     //check battery if it's been more than 60 ticks
@@ -13,7 +13,7 @@ void statusManagement(){
         statusBarSprite.fillSprite(BLACK);                                  //fill sprite area with black
         statusBarSprite.setTextDatum(top_left);                             //text align top-left
         statusBarSprite.setTextColor(PINK,BLACK);                           //set text color
-        statusBarSprite.drawString("DOLL-OS V0.1",10,0);                    //DOLL-OS header
+        statusBarSprite.drawString("DOLL-OS V0.1.1",5,0);                    //DOLL-OS header
         //draw battery percentage
         statusBarSprite.setTextDatum(top_right);
         statusBarSprite.drawString(batteryText, statusBarSprite.width() - 5, 0);
@@ -94,6 +94,26 @@ void addWrappedHistoryLine(const String& line, uint16_t color) {
     addHistoryRow(row, color); //add any remaining text as a new row
 }
 
+//overwrites the last row in history in place -- used to live-update a line that
+//hasn't been terminated by '\n' yet, so streamed prompts (e.g. "login:") show up
+//immediately instead of waiting for the next line to arrive
+void updateLastHistoryRow(const String& row, uint16_t color) {
+    if (historyCount == 0) {
+        return;
+    }
+    historyLines[historyCount - 1] = row;
+    historyColors[historyCount - 1] = color;
+    scrollOffset = 0;
+}
+
+//drops the last row in history -- used to remove a live partial row so its
+//finished contents can be re-added through addWrappedHistoryLine's word wrap
+void removeLastHistoryRow() {
+    if (historyCount > 0) {
+        historyCount--;
+    }
+}
+
 void scrollHistory(int delta) {
     const int maxScroll = max(0, historyCount - terminalVisibleLines());
     scrollOffset = constrain(scrollOffset + delta, 0, maxScroll);
@@ -140,6 +160,8 @@ void drawUsbWarning() {
     M5Cardputer.Display.drawString("USB MODE ACTIVE", M5Cardputer.Display.width() / 2, top + height / 2 - 8);
     M5Cardputer.Display.drawString("FN + ` to exit", M5Cardputer.Display.width() / 2, top + height / 2 + 8);
 }
+
+//boot logo
 void drawBootLogo() {
     M5Cardputer.Display.setTextSize(2);
     const int top = terminalAreaY();
@@ -148,7 +170,7 @@ void drawBootLogo() {
     M5Cardputer.Display.setTextDatum(middle_center);
     M5Cardputer.Display.setTextColor(PINK, BLACK);
     M5Cardputer.Display.drawString("DOLL-OS", M5Cardputer.Display.width() / 2, top + height / 2 - 8);
-    M5Cardputer.Display.drawString("V-0.1", M5Cardputer.Display.width() / 2, top + height / 2 + 8);
+    M5Cardputer.Display.drawString("V-0.1.1", M5Cardputer.Display.width() / 2, top + height / 2 + 8);
     M5Cardputer.Display.setTextSize(1);
 }
 //Command Bar Area
@@ -162,7 +184,34 @@ void drawCommandBar(const String& text) {
     commandBarSprite.fillSprite(BLACK);
     commandBarSprite.drawFastHLine(0,0,commandBarSprite.width(), WHITE);
     commandBarSprite.drawString(">", COMMAND_BAR_PADDING,COMMAND_BAR_PADDING);
-    commandBarSprite.drawString(text,COMMAND_BAR_PADDING + 12, COMMAND_BAR_PADDING);
+
+    const int textX = COMMAND_BAR_PADDING + 12;
+    const int maxWidth = max(0, (int)commandBarSprite.width() - textX - COMMAND_BAR_PADDING);
+
+    commandCursorPos = constrain(commandCursorPos, 0, (int)text.length());
+
+    //scroll left so the cursor is never left of the visible window
+    if (commandCursorPos < commandScrollOffset) {
+        commandScrollOffset = commandCursorPos;
+    }
+    //scroll right so the cursor is never right of the visible window
+    while (commandBarSprite.textWidth(text.substring(commandScrollOffset, commandCursorPos)) > maxWidth) {
+        commandScrollOffset++;
+    }
+    //pull the window back left while there's still room, so deleting text reveals earlier characters again
+    while (commandScrollOffset > 0 &&
+           commandBarSprite.textWidth(text.substring(commandScrollOffset - 1, commandCursorPos)) <= maxWidth) {
+        commandScrollOffset--;
+    }
+    commandScrollOffset = constrain(commandScrollOffset, 0, (int)text.length());
+
+    String visible = text.substring(commandScrollOffset);
+    commandBarSprite.drawString(visible, textX, COMMAND_BAR_PADDING);
+
+    //draw a beam cursor at the current position within the visible text
+    int cursorX = textX + commandBarSprite.textWidth(text.substring(commandScrollOffset, commandCursorPos));
+    commandBarSprite.drawFastVLine(cursorX, COMMAND_BAR_PADDING, 10, WHITE);
+
     commandBarSprite.pushSprite(0,commandBarY());
 }
 

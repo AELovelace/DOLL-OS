@@ -1,6 +1,6 @@
 //   DOLL-OS.ino
 //   entry point, wires up hardware init and drives the main loop
-
+//   no vibecode. section is more-or-less complete. 
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <FS.h>

@@ -1,6 +1,6 @@
 //   CommandProcessor.ino
 //   parses and runs terminal commands for DollOS
-
+// vibe coded struct system for commands, as i was out of ideas. 
 //command processing
 
 //split commands for ingestion into command subsystem
@@ -34,6 +34,50 @@ int splitCommand(const String& input, String parts[], int maxParts) {
     return(count);
 }
 
+//remembers a sent command, evicting the oldest entry once full (mirrors addHistoryRow's shift logic)
+void addCommandHistory(const String& cmd) {
+    if (cmd.length() == 0) {
+        return;
+    }
+    if (commandHistoryCount < COMMAND_HISTORY_MAX) {
+        commandHistory[commandHistoryCount++] = cmd;
+    } else {
+        for (int i = 1; i < COMMAND_HISTORY_MAX; i++) {
+            commandHistory[i - 1] = commandHistory[i];
+        }
+        commandHistory[COMMAND_HISTORY_MAX - 1] = cmd;
+    }
+    commandHistoryIndex = -1;   //sending a command always ends any in-progress recall
+}
+
+//steps through previously sent commands into the live command buffer.
+//step < 0 moves to older commands, step > 0 moves to newer commands and eventually back to the stashed draft.
+void recallCommandHistory(int step, String& text) {
+    if (commandHistoryCount == 0) {
+        return;
+    }
+
+    if (commandHistoryIndex == -1) {
+        if (step > 0) {   //already showing the live draft, nothing newer to recall
+            return;
+        }
+        commandHistoryDraft = text;   //stash in-progress typing so it can be restored later
+        commandHistoryIndex = commandHistoryCount - 1;
+    } else {
+        int newIndex = commandHistoryIndex + step;
+        if (newIndex < 0) {
+            newIndex = 0;
+        } else if (newIndex >= commandHistoryCount) {
+            commandHistoryIndex = -1;
+            text = commandHistoryDraft;
+            return;
+        }
+        commandHistoryIndex = newIndex;
+    }
+
+    text = commandHistory[commandHistoryIndex];
+}
+
 //dispatch table entry: command name -> handler
 struct CommandEntry {
     const char* name;
@@ -41,16 +85,21 @@ struct CommandEntry {
 };
 
 void helpCommandHandler(const String parts[], int partCount) {
-    addWrappedHistoryLine("Commands: help, clear, wifi, ip, ls, usb, ping, motoko");
+    addWrappedHistoryLine("Commands: help, cd, clear, dice, wifi, ip, ls, pwd, ssh, telnet, usb, ping, motoko");
 }
 
 //sorted alphabetically for readability; lookup is a linear scan since the table is tiny
 static const CommandEntry commandTable[] = {
+    { "cd",     handleCdCommand },
+    { "dice",     handleDiceCommand },
     { "help",   helpCommandHandler },
     { "ip",     handleIpCommand },
     { "ls",     handleLsCommand },
     { "motoko", handleMotokoCommand },
     { "ping",   handlePingCommand },
+    { "pwd",    handlePwdCommand },
+    { "ssh",    handleSshCommand },
+    { "telnet", handleTelnetCommand },
     { "usb",    handleUsbCommand },
     { "wifi",   handleWifiCommand },
 };
@@ -64,6 +113,12 @@ void commandProcessor(String& command) {
 
     String entered = command;   //copy off the buffer before clearing it
     command = "";                //reset the shared buffer so the command bar goes blank
+    commandCursorPos = 0;         //cursor and scroll reset alongside the now-empty buffer
+    commandScrollOffset = 0;
+
+    String trimmedEntered = entered;
+    trimmedEntered.trim();
+    addCommandHistory(trimmedEntered);   //remember this command for ctrl+;/ctrl+. recall
 
     String parts[4];
     int partCount = splitCommand(entered, parts, 4);

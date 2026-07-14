@@ -1,6 +1,6 @@
 //   hardware.ino
 //   handles keyboard input and battery reads for DollOS
-
+// wrote this myself. 
 //Keyboard Management
 
 //polls the keyboard once per loop and redraws/dispatches on change
@@ -49,19 +49,50 @@ bool readKeyboard(String& text) {
             scrollHistory(-1);
             return false;
         }
+
+        if (keysContainChar(keys, ',')) {       //fn + , moves the cursor left within the command buffer
+            if (commandCursorPos > 0) {
+                commandCursorPos--;
+            }
+            return false;
+        }
+
+        if (keysContainChar(keys, '/')) {       //fn + / moves the cursor right within the command buffer
+            if (commandCursorPos < text.length()) {
+                commandCursorPos++;
+            }
+            return false;
+        }
         return false; // Ignore other function key combinations for now
+    }
+
+    if (keys.ctrl) {                            //ctrl held, recall previously sent commands instead of typing
+        if (keysContainChar(keys, '.')) {       //ctrl + . recalls older commands, like pressing up in a shell
+            recallCommandHistory(-1, text);
+            commandCursorPos = text.length();   //jump cursor to end of recalled text, like a shell
+            return false;
+        }
+
+        if (keysContainChar(keys, ';')) {       //ctrl + ; recalls newer commands, like pressing down in a shell
+            recallCommandHistory(1, text);
+            commandCursorPos = text.length();   //jump cursor to end of recalled text, like a shell
+            return false;
+        }
+        return false; // Ignore other ctrl combinations for now
     }
 
     // Exclusive branch: on this keyboard, .word can carry stray characters alongside
     // a backspace press, so handle del on its own and skip the append below.
     if (keys.del) {
-        if (text.length() > 0) {
-            text.remove(text.length() - 1);
+        if (commandCursorPos > 0) {
+            text.remove(commandCursorPos - 1, 1);   //remove the character just before the cursor
+            commandCursorPos--;
         }
     } else {
-        // Add normal characters.
+        // Insert normal characters at the cursor position.
         for (char character : keys.word) {
-            text += character;
+            text = text.substring(0, commandCursorPos) + character + text.substring(commandCursorPos);
+            commandCursorPos++;
         }
     }
 

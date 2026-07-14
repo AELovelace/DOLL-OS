@@ -75,6 +75,12 @@ void handleUsbCommand(const String parts[], int partCount) {
         return;
     }
 
+    //the host PC can freely modify the SD card's directory structure while it's exposed;
+    //bail out of it now so cwd can't end up pointing at something that no longer exists
+    if (cwd == SD_MOUNT || cwd.startsWith(SD_MOUNT + "/")) {
+        cwd = "/";
+    }
+
     if (!mscStarted) {
         msc.vendorID("DOLLOS");
         msc.productID("SD Card");

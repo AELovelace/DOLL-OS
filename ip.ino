@@ -1,7 +1,7 @@
 //   ip.ino
 //   handles the "ip" command: local IP info, a ping-based subnet scan, and
 //   an ARP scan via the esp32ARP library (https://github.com/liquidCS/esp32ARP)
-
+//vibe coded stub
 #include <ESP32Ping.h>
 #include <esp32ARP.h>
 
@@ -58,13 +58,22 @@ void ipScanNetwork() {
     drawTerminalHistory();
 
     int found = 0;
+    String pending = "";
     for (int h = net[3] + 1; h < bcast[3]; h++) {
         IPAddress target(net[0], net[1], net[2], h);
         if (Ping.ping(target, 1)) {
-            addWrappedHistoryLine("host up: " + target.toString(), GREEN);
             found++;
-            drawTerminalHistory();
+            if (pending.length() == 0) {
+                pending = target.toString();
+            } else {
+                addWrappedHistoryLine(pending + "  " + target.toString(), GREEN);
+                pending = "";
+                drawTerminalHistory();
+            }
         }
+    }
+    if (pending.length() > 0) {
+        addWrappedHistoryLine(pending, GREEN);
     }
 
     addWrappedHistoryLine(String(found) + " host(s) responded");

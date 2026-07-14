@@ -5,7 +5,7 @@
 //   drawTerminalHistory / scrollHistory), the shared readKeyboard() input
 //   handler, and commandBarSprite for rendering, rather than keeping its own
 //   separate log buffer, sprite, or keyboard polling loop.
-
+// vibe port of MOTOKO mqtt for AI
 #include <PubSubClient.h>
 
 WiFiClient motokoWifiClient;
@@ -21,6 +21,7 @@ String motokoInputBuffer = "";
 
 unsigned long motokoLastReconnectAttempt = 0;
 const unsigned long MOTOKO_RECONNECT_INTERVAL_MS = 2000;   //non-blocking retry cadence, unlike the original's delay(1000)
+bool motokoWasConnected = false;   //tracks connected->disconnected transitions so we can log them
 
 //draws the "channel> "/"msg> " prompt via the existing command bar
 void motokoDrawInputRow() {
@@ -88,10 +89,21 @@ void runMotokoBlocking() {
         delay(10);
 
         motokoMqttClient.loop();
-        if (!motokoMqttClient.connected() && millis() - motokoLastReconnectAttempt > MOTOKO_RECONNECT_INTERVAL_MS) {
+        bool nowConnected = motokoMqttClient.connected();
+        if (motokoWasConnected && !nowConnected) {
+            addWrappedHistoryLine("MQTT disconnected", RED);
+        }
+        motokoWasConnected = nowConnected;
+
+        if (!nowConnected && millis() - motokoLastReconnectAttempt > MOTOKO_RECONNECT_INTERVAL_MS) {
             motokoLastReconnectAttempt = millis();
+            //setServer() was given a pre-resolved IPAddress and both clients were given short
+            //timeouts, so this blocking call is bounded to ~4s instead of PubSubClient's
+            //default 3s TCP connect + 15s CONNACK wait (or tens of seconds for DNS on a
+            //dead network), which was freezing the keyboard/UI for the length of every attempt.
             if (motokoMqttClient.connect(MOTOKO_CLIENT_ID)) {
                 addWrappedHistoryLine("MQTT connected!", GREEN);
+                motokoWasConnected = true;
                 motokoMqttClient.subscribe("answer");
                 if (motokoChannel.length() > 0) {
                     motokoMqttClient.subscribe(motokoChannel.c_str());
@@ -129,13 +141,25 @@ void handleMotokoCommand(const String parts[], int partCount) {
         port = MOTOKO_DEFAULT_PORT;
     }
 
+    //resolve once up front and hand PubSubClient a raw IP instead of a hostname string --
+    //otherwise every reconnect attempt in runMotokoBlocking() re-runs DNS, which on a dead
+    //network can block for tens of seconds with the keyboard unresponsive
+    IPAddress brokerIp;
+    if (!WiFi.hostByName(broker.c_str(), brokerIp)) {
+        addWrappedHistoryLine("motoko: could not resolve " + broker, RED);
+        return;
+    }
+
     //reset session state so a relaunch starts clean
     motokoInputBuffer = "";
     motokoChannel = "";
     motokoInputMode = MOTOKO_ASK_CHANNEL;
     motokoLastReconnectAttempt = 0;
+    motokoWasConnected = false;
 
-    motokoMqttClient.setServer(broker.c_str(), port);
+    motokoWifiClient.setTimeout(2);       //seconds; bounds the TCP connect attempt
+    motokoMqttClient.setSocketTimeout(2); //seconds; bounds the CONNACK wait
+    motokoMqttClient.setServer(brokerIp, port);
     motokoMqttClient.setCallback(motokoMqttCallback);
     motokoMqttClient.setBufferSize(1024);
 
