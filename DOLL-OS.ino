@@ -32,6 +32,9 @@
   commandBarSprite.createSprite(M5Cardputer.Display.width(), COMMAND_BAR_HEIGHT);   //full width, fixed command bar height
   commandBarSprite.setTextColor(WHITE,BLACK);
 
+  //display bootSplash
+    drawBootLogo();
+    delay(1000);
   //mount internal flash (LittleFS) and the SD card
   initStorage();
 }

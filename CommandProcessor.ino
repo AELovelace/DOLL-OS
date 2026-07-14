@@ -41,12 +41,13 @@ struct CommandEntry {
 };
 
 void helpCommandHandler(const String parts[], int partCount) {
-    addWrappedHistoryLine("Commands: help, clear, wifi, ls, usb, ping, motoko");
+    addWrappedHistoryLine("Commands: help, clear, wifi, ip, ls, usb, ping, motoko");
 }
 
 //sorted alphabetically for readability; lookup is a linear scan since the table is tiny
 static const CommandEntry commandTable[] = {
     { "help",   helpCommandHandler },
+    { "ip",     handleIpCommand },
     { "ls",     handleLsCommand },
     { "motoko", handleMotokoCommand },
     { "ping",   handlePingCommand },

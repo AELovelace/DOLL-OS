@@ -11,9 +11,7 @@
 WiFiClient motokoWifiClient;
 PubSubClient motokoMqttClient(motokoWifiClient);
 
-const char* MOTOKO_DEFAULT_BROKER = "192.168.44.4";
-const int MOTOKO_DEFAULT_PORT = 1883;
-const char* MOTOKO_CLIENT_ID = "MOTOKO-Cardputer";
+
 
 enum MotokoInputMode { MOTOKO_ASK_CHANNEL, MOTOKO_ASK_MESSAGE };
 MotokoInputMode motokoInputMode = MOTOKO_ASK_CHANNEL;

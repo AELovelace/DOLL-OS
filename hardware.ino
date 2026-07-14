@@ -63,11 +63,6 @@ bool readKeyboard(String& text) {
         for (char character : keys.word) {
             text += character;
         }
-
-//        // Add a space.
-//        if (keys.space) {
-//            text += ' ';
-//        }
     }
 
     // Signal that the command is complete.

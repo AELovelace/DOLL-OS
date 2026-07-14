@@ -140,7 +140,17 @@ void drawUsbWarning() {
     M5Cardputer.Display.drawString("USB MODE ACTIVE", M5Cardputer.Display.width() / 2, top + height / 2 - 8);
     M5Cardputer.Display.drawString("FN + ` to exit", M5Cardputer.Display.width() / 2, top + height / 2 + 8);
 }
-
+void drawBootLogo() {
+    M5Cardputer.Display.setTextSize(2);
+    const int top = terminalAreaY();
+    const int height = M5Cardputer.Display.height() - top - COMMAND_BAR_HEIGHT;
+    M5Cardputer.Display.fillRect(0, top, M5Cardputer.Display.width(), height, CYAN);
+    M5Cardputer.Display.setTextDatum(middle_center);
+    M5Cardputer.Display.setTextColor(PINK, BLACK);
+    M5Cardputer.Display.drawString("DOLL-OS", M5Cardputer.Display.width() / 2, top + height / 2 - 8);
+    M5Cardputer.Display.drawString("V-0.1", M5Cardputer.Display.width() / 2, top + height / 2 + 8);
+    M5Cardputer.Display.setTextSize(1);
+}
 //Command Bar Area
 int commandBarY(){
     return M5Cardputer.Display.height() - COMMAND_BAR_HEIGHT;
