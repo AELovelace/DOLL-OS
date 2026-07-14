@@ -1,6 +1,11 @@
 //   wifi.ino
 //   handles wifi scanning/connectivity for DollOS
 
+#include <LittleFS.h>
+
+//path of the saved wifi credentials file on LittleFS
+const char* WIFI_CREDS_PATH = "/wifi.cfg";
+
 
 //TODO: actually scan and report nearby networks, currently just flips radio into station mode
 void scanWifiNetworks() {
@@ -116,12 +121,41 @@ void connectWifiNetwork(const String& ssid, const String& password) {
     }
 }
 
+// Save WiFi credentials to LittleFS so they can be reused after reboot.
+// Stored as two lines: ssid, then password.
+bool saveWifiCredentials(const String& ssid, const String& password) {
+    File file = LittleFS.open(WIFI_CREDS_PATH, "w");
+    if (!file) {
+        return false;
+    }
+    file.println(ssid);
+    file.println(password);
+    file.close();
+    return true;
+}
+
+// Load previously saved WiFi credentials from LittleFS.
+// Returns true and fills ssid/password if a saved file was found.
+bool loadWifiCredentials(String& ssid, String& password) {
+    File file = LittleFS.open(WIFI_CREDS_PATH, "r");
+    if (!file) {
+        return false;
+    }
+    ssid = file.readStringUntil('\n');
+    password = file.readStringUntil('\n');
+    file.close();
+
+    ssid.trim();
+    password.trim();
+    return ssid.length() > 0;
+}
+
 // Handle everything that starts with the "wifi" command.
 //
 // Expected forms:
 // wifi
-// wifi -scan
-// wifi -connect <ssid> <password>
+// wifi scan
+// wifi connect <ssid> <password>
 void handleWifiCommand(const String parts[], int partCount) {
     // If the user typed only "wifi", show current status.
     if (partCount == 1) {
@@ -129,21 +163,22 @@ void handleWifiCommand(const String parts[], int partCount) {
         return;
     }
 
-    // If the user typed "wifi -scan", run your existing scan function.
+    // If the user typed "wifi scan", run your existing scan function.
     if (parts[1] == "scan") {
         scanWifiNetworks();
         return;
     }
 
-    // If the user typed "wifi -connect ap password", try to connect.
+    // If the user typed "wifi connect ap password", try to connect.
     if (parts[1] == "connect") {
-        // We need at least 4 tokens:
-        // parts[0] = wifi
-        // parts[1] = -connect
-        // parts[2] = ssid
-        // parts[3] = password
+        // With no ssid/password given, fall back to saved credentials.
         if (partCount < 4) {
-            addWrappedHistoryLine("Usage: wifi -connect <ssid> <password>");
+            String savedSsid, savedPassword;
+            if (loadWifiCredentials(savedSsid, savedPassword)) {
+                connectWifiNetwork(savedSsid, savedPassword);
+            } else {
+                addWrappedHistoryLine("Usage: wifi connect <ssid> <password>");
+            }
             return;
         }
 
@@ -151,9 +186,34 @@ void handleWifiCommand(const String parts[], int partCount) {
         return;
     }
 
+    // If the user typed "wifi save ssid password", store credentials on LittleFS.
+    if (parts[1] == "save") {
+        // With no ssid/password given, save the network we are currently connected to.
+        if (partCount < 4) {
+            if (WiFi.status() != WL_CONNECTED) {
+                addWrappedHistoryLine("Usage: wifi save <ssid> <password>");
+                return;
+            }
+            if (saveWifiCredentials(WiFi.SSID(), WiFi.psk())) {
+                addWrappedHistoryLine("Saved WiFi credentials");
+            } else {
+                addWrappedHistoryLine("Failed to save WiFi credentials");
+            }
+            return;
+        }
+
+        if (saveWifiCredentials(parts[2], parts[3])) {
+            addWrappedHistoryLine("Saved WiFi credentials");
+        } else {
+            addWrappedHistoryLine("Failed to save WiFi credentials");
+        }
+        return;
+    }
+
     // If the subcommand is unknown, print a small help message.
     addWrappedHistoryLine("WiFi subcommands:");
     addWrappedHistoryLine("wifi");
-    addWrappedHistoryLine("wifi -scan");
-    addWrappedHistoryLine("wifi -connect <ssid> <password>");
+    addWrappedHistoryLine("wifi scan");
+    addWrappedHistoryLine("wifi connect <ssid> <password>");
+    addWrappedHistoryLine("wifi save <ssid> <password>");
 }

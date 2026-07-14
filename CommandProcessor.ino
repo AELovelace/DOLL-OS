@@ -34,6 +34,27 @@ int splitCommand(const String& input, String parts[], int maxParts) {
     return(count);
 }
 
+//dispatch table entry: command name -> handler
+struct CommandEntry {
+    const char* name;
+    void (*handler)(const String parts[], int partCount);
+};
+
+void helpCommandHandler(const String parts[], int partCount) {
+    addWrappedHistoryLine("Commands: help, clear, wifi, ls, usb, ping, motoko");
+}
+
+//sorted alphabetically for readability; lookup is a linear scan since the table is tiny
+static const CommandEntry commandTable[] = {
+    { "help",   helpCommandHandler },
+    { "ls",     handleLsCommand },
+    { "motoko", handleMotokoCommand },
+    { "ping",   handlePingCommand },
+    { "usb",    handleUsbCommand },
+    { "wifi",   handleWifiCommand },
+};
+static const int commandTableSize = sizeof(commandTable) / sizeof(commandTable[0]);
+
 //takes the finished command buffer, runs it, and clears command for the next entry
 void commandProcessor(String& command) {
     if (command.length() == 0) {   //nothing typed, nothing to do
@@ -45,7 +66,7 @@ void commandProcessor(String& command) {
 
     String parts[4];
     int partCount = splitCommand(entered, parts, 4);
-    //if no parts, stop here. 
+    //if no parts, stop here.
     if (partCount == 0) {
         return;
     }
@@ -57,29 +78,11 @@ void commandProcessor(String& command) {
 
     addWrappedHistoryLine("> " + entered);   //echo the command into the terminal history
 
-    if (parts[0] == "help") {
-        addWrappedHistoryLine("Commands: help, clear, wifi, ls, usb, ping");
-        return;
+    for (int i = 0; i < commandTableSize; i++) {
+        if (parts[0] == commandTable[i].name) {
+            commandTable[i].handler(parts, partCount);
+            return;
+        }
     }
-    if (parts[0] == "wifi") {
-        // Run the Wi-Fi scanner.
-        handleWifiCommand(parts, partCount);
-        return;
-
-    }
-    if (parts[0] == "ping") {
-        handlePingCommand(parts, partCount);
-        return;
-    }
-    if (parts[0] == "usb") {
-        handleUsbCommand(parts, partCount);
-        return;
-    }
-    if (parts[0] == "ls") {
-        handleLsCommand(parts, partCount);
-        return;
-
-    } else {                                          //fallback for anything not recognized above
-        addWrappedHistoryLine("Unknown command: " + entered);
-    }
+    addWrappedHistoryLine("Unknown command: " + entered);   //fallback for anything not recognized above
 }

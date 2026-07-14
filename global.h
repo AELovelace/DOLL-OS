@@ -26,5 +26,6 @@ const int TERMINAL_PADDING = 4;             //pixel padding around the terminal 
 const int HISTORY_MAX_LINES = 120;          //max rows kept in historyLines before old rows get shifted out
 LGFX_Sprite terminalSprite(&M5Cardputer.Display);   //offscreen buffer the terminal history gets drawn to before pushing
 String historyLines[HISTORY_MAX_LINES];     //ring-ish buffer of wrapped terminal history rows
+uint16_t historyColors[HISTORY_MAX_LINES];  //text color for each row in historyLines, parallel array
 int historyCount = 0;                       //number of valid rows currently in historyLines
 int scrollOffset = 0;                       //how many rows back from the newest line the view is scrolled

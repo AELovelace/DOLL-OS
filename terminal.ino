@@ -42,27 +42,36 @@ int terminalVisibleLines(){
     return max(1, availableHeight / lineHeight);    //max 1 prevents 0 from being returned, takes available height of screen, divides by lineheight, and returns number of possible rows.                                           
 }
 
-void addHistoryRow(const String& row) {
-     
+void addHistoryRow(const String& row, uint16_t color) {
+
     if (historyCount < HISTORY_MAX_LINES) {             //if history count is less than max lines, add to history.
-        historyLines[historyCount++] = row;             //add to history array and increment count
+        historyLines[historyCount] = row;               //add to history array
+        historyColors[historyCount] = color;            //remember its color alongside it
+        historyCount++;
     } else {                                            //else, shift all lines up and add new line at the end
         for (int i = 1; i < HISTORY_MAX_LINES; i++) {   //for i is less than the max lines of history
-            historyLines[i - 1] = historyLines[i];      //shift i back one place to make new history slot open. 
+            historyLines[i - 1] = historyLines[i];      //shift i back one place to make new history slot open.
+            historyColors[i - 1] = historyColors[i];
         }
-        historyLines[HISTORY_MAX_LINES - 1] = row;      //insert row at last index available. 
+        historyLines[HISTORY_MAX_LINES - 1] = row;      //insert row at last index available.
+        historyColors[HISTORY_MAX_LINES - 1] = color;
     }
-    //snap back to newest output after adding row. 
+    //snap back to newest output after adding row.
     scrollOffset = 0;
 }
 
+//plain overload: existing call sites that don't care about color keep working unchanged
 void addWrappedHistoryLine(const String& line) {
+    addWrappedHistoryLine(line, WHITE);
+}
+
+void addWrappedHistoryLine(const String& line, uint16_t color) {
     const int maxWidth = (int)terminalSprite.width() - (TERMINAL_PADDING * 2);  //keep test in terminal sprite padding
     if (maxWidth <0){
-        return;         
+        return;
     }
 
-    String row = "";    //build temporary string to store row in. 
+    String row = "";    //build temporary string to store row in.
 
     for(int i = 0; i < line.length(); i++){
         char ch = line[i]; //get character at index i
@@ -70,7 +79,7 @@ void addWrappedHistoryLine(const String& line) {
 
         //if adding this character exceeds the row width
         if(row.length() > 0 && terminalSprite.textWidth(candidate) > maxWidth){
-            addHistoryRow(row);
+            addHistoryRow(row, color);
             row = "";
 
             //skip leading space on next row
@@ -82,7 +91,7 @@ void addWrappedHistoryLine(const String& line) {
         row += ch;
     }
 
-    addHistoryRow(row); //add any remaining text as a new row
+    addHistoryRow(row, color); //add any remaining text as a new row
 }
 
 void scrollHistory(int delta) {
@@ -110,9 +119,11 @@ void drawTerminalHistory() {
 
     int y = TERMINAL_PADDING;
     for (int i = firstLine; i <= lastLine; i++) {
+        terminalSprite.setTextColor(historyColors[i], BLACK);
         terminalSprite.drawString(historyLines[i], TERMINAL_PADDING, y);
-        y += lineHeight;        
+        y += lineHeight;
     }
+    terminalSprite.setTextColor(WHITE, BLACK);   //reset so anything drawing without its own color call gets the default
     terminalSprite.pushSprite(0, terminalAreaY());
 
 }

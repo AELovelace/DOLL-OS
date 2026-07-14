@@ -50,15 +50,15 @@ void listDirectory(fs::FS& fs, const String& path) {
     }
 }
 
-//handles the "ls" command, lists LittleFS by default or the SD card with -sd
+//handles the "ls" command, lists LittleFS by default or the SD card with sd
 //
 //Expected forms:
 //ls
 //ls <path>
-//ls -sd
-//ls -sd <path>
+//ls sd
+//ls sd <path>
 void handleLsCommand(const String parts[], int partCount) {
-    bool useSd = (partCount > 1 && parts[1] == "-sd");
+    bool useSd = (partCount > 1 && parts[1] == "sd");
 
     String path = "/";
     if (useSd && partCount > 2) {

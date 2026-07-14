@@ -51,19 +51,23 @@ bool readKeyboard(String& text) {
         }
         return false; // Ignore other function key combinations for now
     }
-    // Add normal characters.
-    for (char character : keys.word) {
-        text += character;
-    }
 
-//    // Add a space.
-//    if (keys.space) {
-//        text += ' ';
-//    }
+    // Exclusive branch: on this keyboard, .word can carry stray characters alongside
+    // a backspace press, so handle del on its own and skip the append below.
+    if (keys.del) {
+        if (text.length() > 0) {
+            text.remove(text.length() - 1);
+        }
+    } else {
+        // Add normal characters.
+        for (char character : keys.word) {
+            text += character;
+        }
 
-    // Remove the last character.
-    if (keys.del && text.length() > 0) {
-        text.remove(text.length() - 1);
+//        // Add a space.
+//        if (keys.space) {
+//            text += ' ';
+//        }
     }
 
     // Signal that the command is complete.
