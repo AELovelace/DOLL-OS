@@ -70,6 +70,8 @@ void showWifiStatus() {
     addWrappedHistoryLine("WiFi: connected");
     addWrappedHistoryLine("SSID: " + WiFi.SSID());
     addWrappedHistoryLine("IP: " + WiFi.localIP().toString());
+    addWrappedHistoryLine("Gateway: " + WiFi.gatewayIP().toString());
+    addWrappedHistoryLine("Subnet: " + WiFi.subnetMask().toString());
     addWrappedHistoryLine("RSSI: " + String(WiFi.RSSI()) + " dBm");
 }
 
@@ -107,6 +109,8 @@ void connectWifiNetwork(const String& ssid, const String& password) {
         addWrappedHistoryLine("WiFi connected");
         addWrappedHistoryLine("SSID: " + WiFi.SSID());
         addWrappedHistoryLine("IP: " + WiFi.localIP().toString());
+        addWrappedHistoryLine("Gateway: " + WiFi.gatewayIP().toString());
+        addWrappedHistoryLine("Subnet: " + WiFi.subnetMask().toString());
     } else {
         addWrappedHistoryLine("WiFi connect failed");
     }
