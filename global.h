@@ -68,4 +68,57 @@ struct AnsiFilterState {
     int utf8Remaining = 0;     //continuation bytes still expected for the current UTF-8 sequence
 };
 
+//per-caller state for the shared character-streaming terminal API (terminalStreamPutChar /
+//terminalStreamNewline / terminalStreamReset in terminal.ino). One instance per independent
+//stream of incoming text (ssh's stdout vs stderr, telnet's socket, future callers) so that
+//streams which interleave arbitrarily each track their own in-progress row without corrupting
+//each other's content. Declared here (not in terminal.ino) for the same hoisted-prototype reason
+//as RoutedPath/AnsiFilterState.
+struct TerminalStreamState {
+    String pendingRow = "";     //characters accumulated so far for this stream's current, not-yet-closed row
+    size_t cursorCol = 0;       //index within pendingRow the next character is written at; normally == pendingRow.length()
+                                 //(appending), but a bare '\r' (carriage return without linefeed) rewinds it to 0 so the
+                                 //next characters overwrite in place instead of appending -- the "\r" + erase-line + text
+                                 //idiom remote chat/line-editor software (e.g. telehack's relay) uses to redraw a line
+};
+
+//which TerminalStreamState currently "owns" the last row in historyLines/historyColors, i.e. may
+//keep extending it via updateLastHistoryRow. nullptr = no stream owns an open row right now.
+//Uses each caller's own state-struct address as a lightweight token -- no ID registry needed,
+//works for any future caller automatically.
+TerminalStreamState* terminalOpenRowOwner = nullptr;
+
+//shared modal loop for character-oriented remote sessions (ssh shell, telnet in character mode).
+//Replaces the old per-feature pattern of buffering a full line locally and only sending it once
+//Enter is pressed -- a real remote pty/telnet stream needs every keystroke immediately (arrow
+//keys, ctrl+c, backspace-before-enter, and full-screen/interactive programs all depend on it).
+//Subclasses (TelnetSession in telnet.ino, SshShellSession in ssh.ino) only need to supply the
+//transport; this class owns keystroke capture, the local escape chord (Fn+Q), and the
+//poll/pump/redraw loop shape they'd otherwise each reimplement. Implemented in RemoteSession.ino.
+//
+//Declared here, not alongside its subclasses, for the same hoisting reason as AnsiFilterState/
+//TerminalStreamState above: it must already be visible to every .ino file before any subclass
+//(each defined further down the sketch, after that file's own protocol-library #include) uses it.
+class RemoteSession {
+public:
+    virtual ~RemoteSession() {}
+
+    //runs until the remote closes or the user hits Fn+Q. Callers still print their own
+    //"session ended" line afterward -- this only owns the live back-and-forth.
+    void run();
+
+protected:
+    virtual void pumpIncoming() = 0;                   //drain whatever's arrived since last poll into terminal history
+    virtual bool isClosed() = 0;                       //has the remote end gone away
+    virtual void sendBytes(const String& bytes) = 0;   //forward raw keystroke bytes to the remote
+    virtual void drawInputRow() = 0;                   //draw this session's prompt/status row
+    virtual void onClosed() {}                         //called once, the first time isClosed() is observed true
+
+    //byte(s) sent to the remote when the user presses backspace/delete. Differs by transport:
+    //a real unix pty (ssh) expects DEL (0x7F) as its erase character, but classic telnet/BBS
+    //servers (e.g. telehack.com) implement their own line editor against the original ASCII
+    //backspace (0x08) and may not recognize DEL as an erase request at all. Override per subclass.
+    virtual String backspaceBytes() { return "\x7f"; }
+};
+
 //dice

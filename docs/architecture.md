@@ -102,9 +102,13 @@ It also provides the `ls` command, which can list either LittleFS or SD paths.
 
 `motoko.ino` launches a modal MQTT chat session over the existing terminal UI. It reuses the normal terminal history and keyboard input path instead of introducing a second UI stack.
 
-### SSH Client
+### Remote Sessions (SSH And Telnet)
 
-`ssh.ino` launches a modal SSH session over the existing terminal UI, following the same pattern as `motoko.ino`. Almost all protocol/crypto work is delegated to `libssh_esp32`; the file only handles connecting, a masked password prompt, opening a PTY shell channel, and pumping keystrokes/output through the shared terminal history. It does not verify host keys against a known-hosts store.
+`RemoteSession` (declared in `global.h`, implemented in `RemoteSession.ino`) is a shared abstract base class for character-oriented remote sessions. It owns the modal poll/pump/redraw loop and raw-keystroke capture (via `readRawKeyBytes()` in `hardware.ino`): every keypress is forwarded to the remote immediately rather than buffered locally and sent on Enter, which is what real ptys and telnet character-mode servers expect (arrow keys, ctrl+c, backspace-before-enter, and interactive/full-screen remote programs all depend on it). The local escape chord is `Fn+Q`. A subclass only supplies the transport (`pumpIncoming`, `isClosed`, `sendBytes`, `drawInputRow`, `onClosed`).
+
+`ssh.ino` launches a modal SSH session over the existing terminal UI, following the same pattern as `motoko.ino`. Almost all protocol/crypto work is delegated to `libssh_esp32`. The password prompt is still collected as a local masked buffer (one auth call needs it all at once); once authenticated, a `SshShellSession : RemoteSession` takes over the interactive PTY channel. It does not verify host keys against a known-hosts store.
+
+`telnet.ino` is a plain TCP client with just enough IAC option negotiation (RFC 854/855) to stay usable: it refuses options it doesn't implement, but accepts `ECHO`/`SUPPRESS-GO-AHEAD` when a server offers them, which is what puts well-behaved servers (e.g. telehack.com) into character-at-a-time mode. `TelnetSession : RemoteSession` handles the live connection end to end.
 
 ## Command Surface
 
@@ -119,6 +123,7 @@ The current shell commands are:
 - `ping`
 - `motoko`
 - `ssh`
+- `telnet`
 
 Grouped commands already follow a subcommand pattern, especially `wifi` and `ip`. That is the clearest existing extension point for future features.
 
@@ -140,8 +145,9 @@ Grouped commands already follow a subcommand pattern, especially `wifi` and `ip`
 ## File Ownership Map
 
 - `DOLL-OS.ino`: boot and main loop
-- `global.h`: shared global state and sprite instances
-- `hardware.ino`: keyboard polling and input editing
+- `global.h`: shared global state, sprite instances, and the `RemoteSession` base class
+- `RemoteSession.ino`: shared modal loop for character-oriented remote sessions (ssh, telnet)
+- `hardware.ino`: keyboard polling, input editing, and raw-keystroke translation for remote sessions
 - `terminal.ino`: terminal rendering, history wrapping, status bar, boot and USB overlay UI
 - `CommandProcessor.ino`: tokenization and command dispatch
 - `storage.ino`: LittleFS and SD mount, `ls`
@@ -150,7 +156,8 @@ Grouped commands already follow a subcommand pattern, especially `wifi` and `ip`
 - `ping.ino`: direct ping command
 - `usb_msc.ino`: USB mass-storage mode backed by SD
 - `motoko.ino`: modal MQTT chat client
-- `ssh.ino`: modal SSH client
+- `ssh.ino`: modal SSH client (`SshShellSession`)
+- `telnet.ino`: modal telnet client (`TelnetSession`)
 - `config.h`: Motoko default broker settings
 
 ## External Dependencies

@@ -1,10 +1,12 @@
 //   ansi.ino
 //   Minimal ANSI/VT100 escape-sequence filter + UTF-8 sanitizer for remote text
-//   streams (ssh.ino, telnet.ino). DOLL-OS's terminal is a scrolling line history,
-//   not a grid-addressable screen, so cursor-motion/clear/etc. sequences are consumed
-//   and dropped rather than emulated -- this is what was leaking through as raw
-//   "[m[m"-style garbage before. SGR (color) sequences are the one kind actually
-//   interpreted, since historyLines already carries a color per row.
+//   streams (ssh.ino, telnet.ino). DOLL-OS's terminal is a scrolling line history, not a
+//   grid-addressable screen, so most cursor-motion sequences are consumed and dropped rather
+//   than emulated -- this is what was leaking through as raw "[m[m"-style garbage before. SGR
+//   (color) sequences are interpreted, since historyLines already carries a color per row, and
+//   so is CSI 'K' (erase in line): remote software commonly pairs a bare '\r' with it to redraw
+//   the current line in place (e.g. a chat relay overwriting a user's prompt when someone else's
+//   message arrives) -- dropping that erase silently used to leave stale trailing text behind.
 //
 //   Colors are per-row, not per-character, so a color change mid-line only takes
 //   effect for whichever row is flushed after it -- a deliberate simplification,
@@ -56,9 +58,17 @@ static uint16_t ansiApplySgr(const String& params, uint16_t currentColor, uint16
 //continuation byte, or a control character with no display representation.
 //color is read (as the "current" color to modify) and written in place; colorChanged
 //is set true whenever an SGR sequence just completed, so callers know to re-tag
-//whatever row they're building.
-bool ansiFilterByte(AnsiFilterState& st, uint8_t ch, uint16_t defaultColor, uint16_t& color, char& outCh, bool& colorChanged) {
+//whatever row they're building. isBackspace is set true when the byte was BS (0x08) or
+//DEL (0x7F) -- a remote erasing a character it previously echoed (e.g. a telnet/BBS server's
+//own line editor backing over what you just typed) -- so callers can actually remove that
+//character from history instead of silently dropping the byte, which is what made backspace
+//look broken during a live telnet/ssh session. eraseToEndOfLine is set true on a CSI 'K'
+//(erase in line) sequence -- the 0K/1K/2K parameter distinction isn't tracked, since all three
+//are just variants of the same "\r" + erase + redraw-in-place idiom this filter needs to support.
+bool ansiFilterByte(AnsiFilterState& st, uint8_t ch, uint16_t defaultColor, uint16_t& color, char& outCh, bool& colorChanged, bool& isBackspace, bool& eraseToEndOfLine) {
     colorChanged = false;
+    isBackspace = false;
+    eraseToEndOfLine = false;
 
     switch (st.state) {
         case ANSI_TEXT:
@@ -83,11 +93,15 @@ bool ansiFilterByte(AnsiFilterState& st, uint8_t ch, uint16_t defaultColor, uint
                 outCh = '?';
                 return true;
             }
+            if (ch == 0x08 || ch == 0x7F) {   //BS or DEL
+                isBackspace = true;
+                return false;
+            }
             if (ch == '\t' || (ch >= 0x20 && ch < 0x7F)) {
                 outCh = (char)ch;
                 return true;
             }
-            return false;   //other control bytes (BEL, BS, ...) -- no display representation yet
+            return false;   //other control bytes (BEL, ...) -- no display representation yet
 
         case ANSI_ESC:
             if (ch == '[') {
@@ -105,6 +119,8 @@ bool ansiFilterByte(AnsiFilterState& st, uint8_t ch, uint16_t defaultColor, uint
                 if (ch == 'm') {
                     color = ansiApplySgr(st.csiParams, color, defaultColor);
                     colorChanged = true;
+                } else if (ch == 'K') {
+                    eraseToEndOfLine = true;
                 }
                 st.state = ANSI_TEXT;
             } else {

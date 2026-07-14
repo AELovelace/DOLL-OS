@@ -67,13 +67,14 @@ bool readKeyboard(String& text) {
     }
 
     if (keys.ctrl) {                            //ctrl held, recall previously sent commands instead of typing
-        if (keysContainChar(keys, '.')) {       //ctrl + . recalls older commands, like pressing up in a shell
+        //the driver reports the shifted variant ('>' / ':') while ctrl is held, not the bare '.' / ';'
+        if (keysContainChar(keys, ':')) {       //ctrl + ; recalls older commands, like pressing up in a shell
             recallCommandHistory(-1, text);
             commandCursorPos = text.length();   //jump cursor to end of recalled text, like a shell
             return false;
         }
 
-        if (keysContainChar(keys, ';')) {       //ctrl + ; recalls newer commands, like pressing down in a shell
+        if (keysContainChar(keys, '>')) {       //ctrl + . recalls newer commands, like pressing down in a shell
             recallCommandHistory(1, text);
             commandCursorPos = text.length();   //jump cursor to end of recalled text, like a shell
             return false;
@@ -98,6 +99,66 @@ bool readKeyboard(String& text) {
 
     // Signal that the command is complete.
     return keys.enter;
+}
+
+//translates one raw keystroke into the literal bytes a remote character-oriented stream expects
+//(ssh shell pty, telnet in character mode). Unlike readKeyboard, nothing is buffered or edited
+//locally -- every keypress becomes bytes immediately and is handed back for the caller to forward,
+//the same way a real terminal emulator feeds a pty. Used by RemoteSession::run() (RemoteSession.ino).
+//
+//Returns true if this keystroke produced bytes to send (outBytes is only meaningful then).
+//escapePressed is set instead when the user hit the local Fn+Q "disconnect" chord; backspacePressed
+//is set instead when the user hit backspace/delete -- callers translate that to the right byte(s)
+//for their transport via RemoteSession::backspaceBytes() rather than a byte hardcoded here.
+bool readRawKeyBytes(String& outBytes, bool& escapePressed, bool& backspacePressed) {
+    outBytes = "";
+    escapePressed = false;
+    backspacePressed = false;
+
+    if (!M5Cardputer.Keyboard.isChange()) {
+        return false;
+    }
+    if (!M5Cardputer.Keyboard.isPressed()) {
+        return false;
+    }
+
+    Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
+
+    if (keys.fn) {                              //fn combos stay local -- scrolling and the escape chord, never sent to the remote
+        if (keysContainChar(keys, ';')) {
+            scrollHistory(1);
+        } else if (keysContainChar(keys, '.')) {
+            scrollHistory(-1);
+        } else if (keysContainChar(keys, 'q')) {
+            escapePressed = true;
+        }
+        return false;
+    }
+
+    if (keys.ctrl) {                            //forward ctrl+letter as its control byte (ctrl+c -> 0x03, etc.) --
+        for (char c : keys.word) {              //remote shells and telehack alike rely on these for signals/line-editing
+            char lower = tolower((unsigned char)c);
+            if (lower >= 'a' && lower <= 'z') {
+                outBytes += (char)(lower - 'a' + 1);
+            }
+        }
+        return outBytes.length() > 0;
+    }
+
+    if (keys.del) {
+        backspacePressed = true;
+        return false;
+    }
+
+    if (keys.enter) {
+        outBytes = "\r";
+        return true;
+    }
+
+    for (char c : keys.word) {
+        outBytes += c;
+    }
+    return outBytes.length() > 0;
 }
 
 //TODO: read battery percent from M5Cardputer.Power, mirrors statusManagement's inline read

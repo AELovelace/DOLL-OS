@@ -129,6 +129,7 @@ void commandProcessor(String& command) {
     if (parts[0] == "clear") {    //clear wipes history without echoing itself
         historyCount = 0;
         scrollOffset = 0;
+        terminalOpenRowOwner = nullptr;
         return;
     }
 

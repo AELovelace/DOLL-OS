@@ -43,6 +43,9 @@ int terminalVisibleLines(){
 }
 
 void addHistoryRow(const String& row, uint16_t color) {
+    //a brand-new row is about to become "the last row" through the normal (non-streaming) path --
+    //any stream that still thought it owned the previous last row doesn't anymore
+    terminalOpenRowOwner = nullptr;
 
     if (historyCount < HISTORY_MAX_LINES) {             //if history count is less than max lines, add to history.
         historyLines[historyCount] = row;               //add to history array
@@ -56,8 +59,8 @@ void addHistoryRow(const String& row, uint16_t color) {
         historyLines[HISTORY_MAX_LINES - 1] = row;      //insert row at last index available.
         historyColors[HISTORY_MAX_LINES - 1] = color;
     }
-    //snap back to newest output after adding row.
-    scrollOffset = 0;
+    //scrollOffset is intentionally left untouched here -- forcing it to 0 on every row would
+    //yank a user who's scrolled back to read history down to the bottom on every new line
 }
 
 //plain overload: existing call sites that don't care about color keep working unchanged
@@ -103,15 +106,130 @@ void updateLastHistoryRow(const String& row, uint16_t color) {
     }
     historyLines[historyCount - 1] = row;
     historyColors[historyCount - 1] = color;
-    scrollOffset = 0;
+    //scrollOffset intentionally left untouched -- see addHistoryRow
 }
 
-//drops the last row in history -- used to remove a live partial row so its
-//finished contents can be re-added through addWrappedHistoryLine's word wrap
-void removeLastHistoryRow() {
-    if (historyCount > 0) {
-        historyCount--;
+//shared close-out for the streaming API below: releases this stream's ownership of the last
+//row (if held) and clears its pending content. Nothing needs to be (re)drawn here -- every
+//character was already drawn live via terminalStreamPutChar, so there's no buffered tail to
+//flush at a line/session boundary.
+static void terminalStreamCloseRow(TerminalStreamState& st) {
+    if (terminalOpenRowOwner == &st) {
+        terminalOpenRowOwner = nullptr;
     }
+    st.pendingRow = "";
+    st.cursorCol = 0;
+}
+
+//call at session start, and defensively at session end, so a fresh session never inherits a
+//previous session's in-progress row or stale ownership
+void terminalStreamReset(TerminalStreamState& st) {
+    terminalStreamCloseRow(st);
+}
+
+//call whenever a stream sees a line terminator ('\n'). Everything up to it was already drawn
+//live by terminalStreamPutChar, so this only closes the row out -- the next character (from
+//this stream or a different one) starts a fresh row instead of extending the finished one.
+void terminalStreamNewline(TerminalStreamState& st) {
+    terminalStreamCloseRow(st);
+}
+
+//feeds one already-filtered, printable character from a live byte stream (ssh, telnet, or any
+//future caller) directly into the terminal, using the same char-wrap-with-leading-space-skip
+//algorithm addWrappedHistoryLine uses for complete strings -- except both the wrap decision and
+//the row it produces happen incrementally, one character at a time, and are visible immediately.
+//
+//Multiple independent streams can call this and interleave arbitrarily (e.g. ssh's stdout and
+//stderr): terminalOpenRowOwner tracks which stream currently owns the in-progress last row, so a
+//stream that's lost ownership (because another stream wrote in between) correctly discards its
+//own stale pendingRow and starts a fresh row rather than corrupting whatever's now last.
+void terminalStreamPutChar(TerminalStreamState& st, char ch, uint16_t color) {
+    const int maxWidth = (int)terminalSprite.width() - (TERMINAL_PADDING * 2);
+    if (maxWidth < 0) {
+        return;
+    }
+
+    //someone else's row (or nobody's) is currently last -- our own previously-accumulated
+    //pendingRow was already finalized on-screen the instant we lost ownership, so resuming from
+    //it here would duplicate already-shown text as a prefix of a new row
+    if (terminalOpenRowOwner != &st) {
+        st.pendingRow = "";
+        st.cursorCol = 0;
+    }
+
+    bool atEnd = st.cursorCol >= (size_t)st.pendingRow.length();
+
+    //writing past the current end grows the row and can trigger a wrap; writing at an earlier
+    //column (cursorCol was rewound by a bare '\r') always overwrites in place instead, which
+    //can't make the row any wider than it already was, so no wrap check applies there
+    if (atEnd && st.pendingRow.length() > 0 &&
+        terminalSprite.textWidth(st.pendingRow + ch) > maxWidth) {
+        st.pendingRow = "";
+        st.cursorCol = 0;
+        terminalOpenRowOwner = nullptr;
+        if (ch == ' ') {
+            return;   //skip-leading-space-on-wrap, same as addWrappedHistoryLine
+        }
+        atEnd = true;
+        //ch becomes the first character of the new row -- falls through
+    }
+
+    if (atEnd) {
+        st.pendingRow += ch;
+    } else {
+        st.pendingRow.setCharAt(st.cursorCol, ch);
+    }
+    st.cursorCol++;
+
+    if (terminalOpenRowOwner == &st) {
+        updateLastHistoryRow(st.pendingRow, color);   //still our open row -- extend or overwrite it live
+    } else {
+        addHistoryRow(st.pendingRow, color);          //fresh row (never opened, or just reclaimed)
+        terminalOpenRowOwner = &st;
+    }
+}
+
+//rewinds this stream's write cursor to the start of its current in-progress row, without erasing
+//it -- the "\r" half of the classic "\r" + erase-line + text idiom remote chat/line-editor software
+//uses to redraw a line in place (e.g. telehack's relay overwriting a user's prompt when another
+//user's message arrives). Subsequent characters overwrite from the beginning instead of appending,
+//matching what a real terminal does on a bare carriage return.
+//
+//No-op if this stream doesn't currently own the open row: there's nothing of ours on screen yet to
+//rewind into -- terminalStreamPutChar's own ownership-reclaim logic already starts it fresh.
+void terminalStreamCarriageReturn(TerminalStreamState& st) {
+    if (terminalOpenRowOwner == &st) {
+        st.cursorCol = 0;
+    }
+}
+
+//truncates this stream's in-progress row from the current cursor column onward -- the "erase
+//line" half of the "\r" + erase-line + text redraw idiom (ANSI CSI 'K'). Without this, that
+//erase was silently dropped (consistent with every other cursor-motion sequence this filter
+//discards), leaving stale trailing text in place -- e.g. a shorter incoming message glued onto
+//the tail of whatever the user had been typing when it arrived.
+void terminalStreamEraseToEnd(TerminalStreamState& st) {
+    if (terminalOpenRowOwner != &st || st.cursorCol >= (size_t)st.pendingRow.length()) {
+        return;
+    }
+    st.pendingRow.remove(st.cursorCol);
+    updateLastHistoryRow(st.pendingRow, historyColors[historyCount - 1]);
+}
+
+//erases the character just before this stream's write cursor -- call when a live byte stream
+//(ssh, telnet) delivers BS/DEL, which ansiFilterByte reports via its isBackspace out-param.
+//Mirrors what a real terminal does on receiving those bytes: removes the character rather than
+//just dropping the byte, so a remote's own erase-echo (e.g. a telnet/BBS server backing over what
+//you just typed) actually shows up as backspace instead of leaving stale text on screen. Acts at
+//cursorCol rather than always trimming the row's end, since a preceding '\r' can have rewound the
+//cursor mid-row (see terminalStreamCarriageReturn).
+void terminalStreamBackspace(TerminalStreamState& st) {
+    if (terminalOpenRowOwner != &st || st.cursorCol == 0) {
+        return;   //nothing of ours left on screen to erase (lost ownership, or already at a row boundary)
+    }
+    st.cursorCol--;
+    st.pendingRow.remove(st.cursorCol, 1);
+    updateLastHistoryRow(st.pendingRow, historyColors[historyCount - 1]);
 }
 
 void scrollHistory(int delta) {
@@ -178,14 +296,24 @@ int commandBarY(){
     return M5Cardputer.Display.height() - COMMAND_BAR_HEIGHT;
 }
 
-//Draws command bar at bottom fo the screen
+//plain overload: existing call sites that just show "> " over currentCommand keep working unchanged
 void drawCommandBar(const String& text) {
+    drawCommandBar("> ", text);
+}
+
+//Draws command bar at bottom of the screen. `prompt` is a fixed, non-editable label (e.g. "> ",
+//"channel> ", "password> ") pinned at the left edge and drawn in full every time -- it never
+//scrolls out of view. `text` is the live-editable buffer; commandCursorPos/commandScrollOffset
+//(maintained by readKeyboard) index directly into it, so callers should pass their raw input
+//buffer here rather than pre-concatenating the prompt onto it -- concatenating would shift the
+//buffer's character indices and make the cursor land in the wrong place.
+void drawCommandBar(const String& prompt, const String& text) {
     //get location of y from commandBarY();
     commandBarSprite.fillSprite(BLACK);
     commandBarSprite.drawFastHLine(0,0,commandBarSprite.width(), WHITE);
-    commandBarSprite.drawString(">", COMMAND_BAR_PADDING,COMMAND_BAR_PADDING);
+    commandBarSprite.drawString(prompt, COMMAND_BAR_PADDING,COMMAND_BAR_PADDING);
 
-    const int textX = COMMAND_BAR_PADDING + 12;
+    const int textX = COMMAND_BAR_PADDING + (int)commandBarSprite.textWidth(prompt);
     const int maxWidth = max(0, (int)commandBarSprite.width() - textX - COMMAND_BAR_PADDING);
 
     commandCursorPos = constrain(commandCursorPos, 0, (int)text.length());

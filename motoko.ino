@@ -26,7 +26,7 @@ bool motokoWasConnected = false;   //tracks connected->disconnected transitions 
 //draws the "channel> "/"msg> " prompt via the existing command bar
 void motokoDrawInputRow() {
     const char* prompt = (motokoInputMode == MOTOKO_ASK_CHANNEL) ? "channel> " : "msg> ";
-    drawCommandBar(String(prompt) + motokoInputBuffer);
+    drawCommandBar(prompt, motokoInputBuffer);
 }
 
 //PubSubClient callback: logs incoming messages into the shared terminal history,
