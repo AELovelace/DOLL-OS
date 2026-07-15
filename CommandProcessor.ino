@@ -1,7 +1,7 @@
 //   CommandProcessor.ino
 //   parses and runs terminal commands for DollOS
-// vibe coded struct system for commands, as i was out of ideas. 
-//command processing
+//   vibe coded struct system for commands, as i was out of ideas. 
+//   command processing
 
 //split commands for ingestion into command subsystem
 int splitCommand(const String& input, String parts[], int maxParts) {
@@ -51,17 +51,21 @@ int splitCommand(const String& input, String parts[], int maxParts) {
 }
 
 //remembers a sent command, evicting the oldest entry once full (mirrors addHistoryRow's shift logic)
+static int commandHistoryPhysicalIndex(int logicalIndex) {
+    return (commandHistoryHead + logicalIndex) % COMMAND_HISTORY_MAX;
+}
+
 void addCommandHistory(const String& cmd) {
     if (cmd.length() == 0) {
         return;
     }
     if (commandHistoryCount < COMMAND_HISTORY_MAX) {
-        commandHistory[commandHistoryCount++] = cmd;
+        int slot = commandHistoryPhysicalIndex(commandHistoryCount);
+        commandHistory[slot] = cmd;
+        commandHistoryCount++;
     } else {
-        for (int i = 1; i < COMMAND_HISTORY_MAX; i++) {
-            commandHistory[i - 1] = commandHistory[i];
-        }
-        commandHistory[COMMAND_HISTORY_MAX - 1] = cmd;
+        commandHistory[commandHistoryHead] = cmd;
+        commandHistoryHead = (commandHistoryHead + 1) % COMMAND_HISTORY_MAX;
     }
     commandHistoryIndex = -1;   //sending a command always ends any in-progress recall
 }
@@ -91,7 +95,7 @@ void recallCommandHistory(int step, String& text) {
         commandHistoryIndex = newIndex;
     }
 
-    text = commandHistory[commandHistoryIndex];
+    text = commandHistory[commandHistoryPhysicalIndex(commandHistoryIndex)];
 }
 
 //dispatch table entry: command name -> handler
@@ -109,6 +113,7 @@ static const CommandEntry commandTable[] = {
     { "calc",   handleCalcCommand },
     { "cd",     handleCdCommand },
     { "dice",   handleDiceCommand },
+    { "free",   handleFreeCommand },
     { "help",   helpCommandHandler },
     { "ip",     handleIpCommand },
     { "ls",     handleLsCommand },
@@ -145,6 +150,7 @@ void commandProcessor(String& command) {
     }
     if (parts[0] == "clear") {    //clear wipes history without echoing itself
         historyCount = 0;
+        historyHead = 0;
         scrollOffset = 0;
         terminalOpenRowOwner = nullptr;
         return;

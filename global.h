@@ -20,6 +20,7 @@ LGFX_Sprite commandBarSprite(&M5Cardputer.Display);   //offscreen buffer the com
 const int COMMAND_HISTORY_MAX = 30;          //max previously sent commands remembered
 String commandHistory[COMMAND_HISTORY_MAX];  //oldest at index 0, newest at commandHistoryCount - 1
 int commandHistoryCount = 0;                 //number of valid entries in commandHistory
+int commandHistoryHead = 0;                  //physical slot of the oldest command in the ring buffer
 int commandHistoryIndex = -1;                //entry currently recalled into the command bar; -1 means not recalling
 String commandHistoryDraft = "";             //in-progress typing stashed when recall starts, restored when recall runs past the newest entry
 
@@ -41,6 +42,17 @@ struct RoutedPath {
 const int STATUS_BAR_HEIGHT = 14;   //pixel height of the top status bar
 LGFX_Sprite statusBarSprite(&M5Cardputer.Display);   //offscreen buffer the status bar gets drawn to before pushing
 
+//heap instrumentation
+const int HEAP_CHECKPOINT_MAX = 8;
+struct HeapCheckpoint {
+    const char* tag;
+    uint32_t freeHeap;
+    uint32_t largestBlock;
+    uint32_t minFreeHeap;
+};
+HeapCheckpoint heapCheckpoints[HEAP_CHECKPOINT_MAX];
+int heapCheckpointCount = 0;
+
 //terminal
 const int TERMINAL_PADDING = 4;             //pixel padding around the terminal history text
 const int HISTORY_MAX_LINES = 120;          //max rows kept in historyLines before old rows get shifted out
@@ -48,6 +60,7 @@ LGFX_Sprite terminalSprite(&M5Cardputer.Display);   //offscreen buffer the termi
 String historyLines[HISTORY_MAX_LINES];     //ring-ish buffer of wrapped terminal history rows
 uint16_t historyColors[HISTORY_MAX_LINES];  //text color for each row in historyLines, parallel array
 int historyCount = 0;                       //number of valid rows currently in historyLines
+int historyHead = 0;                        //physical slot of the oldest logical history row in the ring buffer
 int scrollOffset = 0;                       //how many rows back from the newest line the view is scrolled
 
 //ANSI/UTF-8 filtering for remote text streams (ssh, telnet). Declared here (not in

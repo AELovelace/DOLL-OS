@@ -7,13 +7,14 @@ void statusManagement(){
     if(refreshCounter >= 60){
         batteryPercent = M5Cardputer.Power.getBatteryLevel();               //get batteryPercent  
         batteryMillivolts = M5Cardputer.Power.getBatteryVoltage();          //get battery voltage   
-        String batteryText = "Battery:  " + String(batteryPercent) + "% "   //battery indicator string construction
-                            + String(batteryMillivolts/1000.0f) + "V";    
+        String batteryText = ("FREEMEM:" + String(ESP.getFreeHeap()/1000) +"KB " 
+                            + "B:" + String(batteryPercent) + "% "   //battery indicator string construction
+                            + String(batteryMillivolts/1000.0f) + "V");    
         //draw Dollputer banner
         statusBarSprite.fillSprite(BLACK);                                  //fill sprite area with black
         statusBarSprite.setTextDatum(top_left);                             //text align top-left
         statusBarSprite.setTextColor(PINK,BLACK);                           //set text color
-        statusBarSprite.drawString("DOLL-OS V0.1.1",5,0);                    //DOLL-OS header
+        statusBarSprite.drawString("DOLL-OS",5,0);                    //DOLL-OS header
         //draw battery percentage
         statusBarSprite.setTextDatum(top_right);
         statusBarSprite.drawString(batteryText, statusBarSprite.width() - 5, 0);
@@ -42,22 +43,24 @@ int terminalVisibleLines(){
     return max(1, availableHeight / lineHeight);    //max 1 prevents 0 from being returned, takes available height of screen, divides by lineheight, and returns number of possible rows.                                           
 }
 
+static int historyPhysicalIndex(int logicalIndex) {
+    return (historyHead + logicalIndex) % HISTORY_MAX_LINES;
+}
+
 void addHistoryRow(const String& row, uint16_t color) {
     //a brand-new row is about to become "the last row" through the normal (non-streaming) path --
     //any stream that still thought it owned the previous last row doesn't anymore
     terminalOpenRowOwner = nullptr;
 
     if (historyCount < HISTORY_MAX_LINES) {             //if history count is less than max lines, add to history.
-        historyLines[historyCount] = row;               //add to history array
-        historyColors[historyCount] = color;            //remember its color alongside it
+        int slot = historyPhysicalIndex(historyCount);
+        historyLines[slot] = row;                       //add to history array
+        historyColors[slot] = color;                    //remember its color alongside it
         historyCount++;
-    } else {                                            //else, shift all lines up and add new line at the end
-        for (int i = 1; i < HISTORY_MAX_LINES; i++) {   //for i is less than the max lines of history
-            historyLines[i - 1] = historyLines[i];      //shift i back one place to make new history slot open.
-            historyColors[i - 1] = historyColors[i];
-        }
-        historyLines[HISTORY_MAX_LINES - 1] = row;      //insert row at last index available.
-        historyColors[HISTORY_MAX_LINES - 1] = color;
+    } else {
+        historyLines[historyHead] = row;                //overwrite the oldest physical slot
+        historyColors[historyHead] = color;
+        historyHead = (historyHead + 1) % HISTORY_MAX_LINES;
     }
     //scrollOffset is intentionally left untouched here -- forcing it to 0 on every row would
     //yank a user who's scrolled back to read history down to the bottom on every new line
@@ -104,8 +107,9 @@ void updateLastHistoryRow(const String& row, uint16_t color) {
     if (historyCount == 0) {
         return;
     }
-    historyLines[historyCount - 1] = row;
-    historyColors[historyCount - 1] = color;
+    int lastSlot = historyPhysicalIndex(historyCount - 1);
+    historyLines[lastSlot] = row;
+    historyColors[lastSlot] = color;
     //scrollOffset intentionally left untouched -- see addHistoryRow
 }
 
@@ -213,7 +217,8 @@ void terminalStreamEraseToEnd(TerminalStreamState& st) {
         return;
     }
     st.pendingRow.remove(st.cursorCol);
-    updateLastHistoryRow(st.pendingRow, historyColors[historyCount - 1]);
+    int lastSlot = historyPhysicalIndex(historyCount - 1);
+    updateLastHistoryRow(st.pendingRow, historyColors[lastSlot]);
 }
 
 //erases the character just before this stream's write cursor -- call when a live byte stream
@@ -229,7 +234,8 @@ void terminalStreamBackspace(TerminalStreamState& st) {
     }
     st.cursorCol--;
     st.pendingRow.remove(st.cursorCol, 1);
-    updateLastHistoryRow(st.pendingRow, historyColors[historyCount - 1]);
+    int lastSlot = historyPhysicalIndex(historyCount - 1);
+    updateLastHistoryRow(st.pendingRow, historyColors[lastSlot]);
 }
 
 void scrollHistory(int delta) {
@@ -257,8 +263,9 @@ void drawTerminalHistory() {
 
     int y = TERMINAL_PADDING;
     for (int i = firstLine; i <= lastLine; i++) {
-        terminalSprite.setTextColor(historyColors[i], BLACK);
-        terminalSprite.drawString(historyLines[i], TERMINAL_PADDING, y);
+        int slot = historyPhysicalIndex(i);
+        terminalSprite.setTextColor(historyColors[slot], BLACK);
+        terminalSprite.drawString(historyLines[slot], TERMINAL_PADDING, y);
         y += lineHeight;
     }
     terminalSprite.setTextColor(WHITE, BLACK);   //reset so anything drawing without its own color call gets the default

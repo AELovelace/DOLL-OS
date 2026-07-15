@@ -1,13 +1,11 @@
 //   wifi.ino
 //   handles wifi scanning/connectivity for DollOS
-
+//half and half. currently optimizing and changing so it works how i want. 
 #include <LittleFS.h>
 
 //path of the saved wifi credentials file on LittleFS
 const char* WIFI_CREDS_PATH = "/wifi.cfg";
 
-
-//TODO: actually scan and report nearby networks, currently just flips radio into station mode
 void scanWifiNetworks() {
     WiFi.mode(WIFI_STA);    //station mode, needed before WiFi.scanNetworks() will work
     WiFi.scanDelete();      //clear wifi scan state
@@ -61,23 +59,13 @@ void scanWifiNetworks() {
 void showWifiStatus() {
     // Put the radio in station mode so normal client networking works.
     WiFi.mode(WIFI_STA);
-
-    // Ask the WiFi library for the current connection state.
-    wl_status_t status = WiFi.status();
-
     // If we are not connected, print a short status message and stop.
-    if (status != WL_CONNECTED) {
+    if (wifiIsConnected() == 0) {
         addWrappedHistoryLine("WiFi: not connected");
         return;
     }
-
     // If connected, print a few details that are useful in a terminal.
-    addWrappedHistoryLine("WiFi: connected");
-    addWrappedHistoryLine("SSID: " + WiFi.SSID());
-    addWrappedHistoryLine("IP: " + WiFi.localIP().toString());
-    addWrappedHistoryLine("Gateway: " + WiFi.gatewayIP().toString());
-    addWrappedHistoryLine("Subnet: " + WiFi.subnetMask().toString());
-    addWrappedHistoryLine("RSSI: " + String(WiFi.RSSI()) + " dBm");
+    wifiStatus();
 }
 
 // Connect to a Wi-Fi network using the provided SSID and password.
@@ -110,12 +98,8 @@ void connectWifiNetwork(const String& ssid, const String& password) {
     }
 
     // Check whether the connection actually succeeded.
-    if (WiFi.status() == WL_CONNECTED) {
-        addWrappedHistoryLine("WiFi connected");
-        addWrappedHistoryLine("SSID: " + WiFi.SSID());
-        addWrappedHistoryLine("IP: " + WiFi.localIP().toString());
-        addWrappedHistoryLine("Gateway: " + WiFi.gatewayIP().toString());
-        addWrappedHistoryLine("Subnet: " + WiFi.subnetMask().toString());
+    if (wifiIsConnected() == 1) {
+        wifiStatus();
     } else {
         addWrappedHistoryLine("WiFi connect failed");
     }
@@ -190,7 +174,7 @@ void handleWifiCommand(const String parts[], int partCount) {
     if (parts[1] == "save") {
         // With no ssid/password given, save the network we are currently connected to.
         if (partCount < 4) {
-            if (WiFi.status() != WL_CONNECTED) {
+            if (wifiIsConnected() != 1) {
                 addWrappedHistoryLine("Usage: wifi save <ssid> <password>");
                 return;
             }
@@ -211,9 +195,31 @@ void handleWifiCommand(const String parts[], int partCount) {
     }
 
     // If the subcommand is unknown, print a small help message.
+    wifiHelp();
+}
+void wifiHelp(){
     addWrappedHistoryLine("WiFi subcommands:");
     addWrappedHistoryLine("wifi");
     addWrappedHistoryLine("wifi scan");
     addWrappedHistoryLine("wifi connect <ssid> <password>");
     addWrappedHistoryLine("wifi save <ssid> <password>");
+    return;
+}
+void wifiStatus(){
+    if (wifiIsConnected() == 1) {
+        addWrappedHistoryLine("WiFi connected");
+        addWrappedHistoryLine("SSID: " + WiFi.SSID());
+        addWrappedHistoryLine("IP: " + WiFi.localIP().toString());
+        addWrappedHistoryLine("Gateway: " + WiFi.gatewayIP().toString());
+        addWrappedHistoryLine("Subnet: " + WiFi.subnetMask().toString());
+    } else {
+        addWrappedHistoryLine("WiFi Not Connected");
+    }
+}
+int wifiIsConnected(){
+    if (WiFi.status() == WL_CONNECTED) {
+        return 1;
+    } else{
+        return 0;
+    }
 }

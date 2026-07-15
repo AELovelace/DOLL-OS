@@ -8,10 +8,16 @@
 #include "global.h"
 
  void setup() {
+  recordHeapCheckpoint("setup start");
+
   //config cardputer. auto determines type
   auto cfg = M5.config();
   //Start cardputer hardware. True == kb on
   M5Cardputer.begin(cfg, true);
+  recordHeapCheckpoint("after M5 begin");
+
+  reserveHotStrings();
+  recordHeapCheckpoint("after reserve");
 
   //init screen
   M5Cardputer.Display.fillScreen(BLACK);      //clear to black on boot
@@ -21,22 +27,26 @@
   //status bar sprite, sits at the very top of the screen
   statusBarSprite.setColorDepth(16);          //16-bit color to keep sprite memory reasonable
   statusBarSprite.createSprite(M5Cardputer.Display.width(), STATUS_BAR_HEIGHT);   //full width, fixed status bar height
+  recordHeapCheckpoint("after status sprite");
 
   //terminal sprite, fills the space between the status bar and command bar
   terminalSprite.setColorDepth(16);
   terminalSprite.createSprite(M5Cardputer.Display.width(), M5Cardputer.Display.height() - STATUS_BAR_HEIGHT - COMMAND_BAR_HEIGHT);   //remaining vertical space
   terminalSprite.setTextColor(WHITE,BLACK);   //white text on black background
+  recordHeapCheckpoint("after terminal sprite");
 
   //command bar sprite, sits at the very bottom of the screen
   commandBarSprite.setColorDepth(16);
   commandBarSprite.createSprite(M5Cardputer.Display.width(), COMMAND_BAR_HEIGHT);   //full width, fixed command bar height
   commandBarSprite.setTextColor(WHITE,BLACK);
+  recordHeapCheckpoint("after command sprite");
 
   //display bootSplash
     drawBootLogo();
     delay(1000);
   //mount internal flash (LittleFS) and the SD card
   initStorage();
+  recordHeapCheckpoint("after storage");
 }
 
 void loop() {
