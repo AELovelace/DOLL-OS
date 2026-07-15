@@ -43,7 +43,7 @@ const int STATUS_BAR_HEIGHT = 14;   //pixel height of the top status bar
 LGFX_Sprite statusBarSprite(&M5Cardputer.Display);   //offscreen buffer the status bar gets drawn to before pushing
 
 //heap instrumentation
-const int HEAP_CHECKPOINT_MAX = 8;
+const int HEAP_CHECKPOINT_MAX = 16;
 struct HeapCheckpoint {
     const char* tag;
     uint32_t freeHeap;
@@ -52,6 +52,7 @@ struct HeapCheckpoint {
 };
 HeapCheckpoint heapCheckpoints[HEAP_CHECKPOINT_MAX];
 int heapCheckpointCount = 0;
+int heapCheckpointHead = 0;
 
 //terminal
 const int TERMINAL_PADDING = 4;             //pixel padding around the terminal history text
@@ -98,6 +99,16 @@ struct TerminalStreamState {
                                  //next characters overwrite in place instead of appending -- the "\r" + erase-line + text
                                  //idiom remote chat/line-editor software (e.g. telehack's relay) uses to redraw a line
 };
+
+extern String sshInputBuffer;
+extern String motokoChannel;
+extern String motokoInputBuffer;
+extern AnsiFilterState telnetAnsi;
+extern AnsiFilterState sshStdoutAnsi;
+extern AnsiFilterState sshStderrAnsi;
+extern TerminalStreamState telnetStream;
+extern TerminalStreamState sshStdoutStream;
+extern TerminalStreamState sshStderrStream;
 
 //which TerminalStreamState currently "owns" the last row in historyRows, i.e. may
 //keep extending it via updateLastHistoryRow. nullptr = no stream owns an open row right now.

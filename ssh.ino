@@ -43,6 +43,7 @@ static bool sshLibInitialized = false;
 //Characters are masked with '*' since they're rendered live as they're typed
 void sshDrawInputRow() {
     String masked;
+    masked.reserve(sshInputBuffer.length());
     for (size_t i = 0; i < sshInputBuffer.length(); i++) {
         masked += '*';
     }

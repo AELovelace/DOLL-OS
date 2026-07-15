@@ -33,6 +33,7 @@ void motokoDrawInputRow() {
 //"answer" gets a bracketed prefix and a highlight color to make the reserved reply topic stand out
 void motokoMqttCallback(char* topic, byte* payload, unsigned int length) {
     String msg;
+    msg.reserve(length);
     for (unsigned int i = 0; i < length; i++) {
         msg += (char)payload[i];
     }

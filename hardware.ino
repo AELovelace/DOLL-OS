@@ -3,11 +3,51 @@
 // wrote this myself. 
 //Keyboard Management
 
+const unsigned long KEYBOARD_DEBOUNCE_MS = 45;
+
+static unsigned long lastKeyboardEventAt = 0;
+static uint32_t lastKeyboardEventSignature = 0;
+
+static uint32_t keyboardEventSignature(const Keyboard_Class::KeysState& keys) {
+    uint32_t signature = 2166136261u;
+
+    auto mixByte = [&signature](uint8_t value) {
+        signature ^= value;
+        signature *= 16777619u;
+    };
+
+    mixByte(keys.fn ? 1 : 0);
+    mixByte(keys.ctrl ? 1 : 0);
+    mixByte(keys.del ? 1 : 0);
+    mixByte(keys.enter ? 1 : 0);
+
+    for (char ch : keys.word) {
+        mixByte((uint8_t)ch);
+    }
+
+    return signature;
+}
+
+static bool keyboardEventIsDebounced(const Keyboard_Class::KeysState& keys) {
+    unsigned long now = millis();
+    uint32_t signature = keyboardEventSignature(keys);
+
+    if (signature == lastKeyboardEventSignature &&
+        now - lastKeyboardEventAt < KEYBOARD_DEBOUNCE_MS) {
+        return true;
+    }
+
+    lastKeyboardEventAt = now;
+    lastKeyboardEventSignature = signature;
+    return false;
+}
+
 //polls the keyboard once per loop and redraws/dispatches on change
 void keyboardLogic(){
-    String previousCommand = currentCommand;             //snapshot command buffer before polling
+    int previousLength = currentCommand.length();        //snapshot enough state to detect an edit without copying the buffer
+    int previousCursorPos = commandCursorPos;
     bool enterPressed = readKeyboard(currentCommand);     //read keyboard, updates currentCommand in place
-    if(currentCommand != previousCommand){                //only redraw the command bar if the text actually changed
+    if(currentCommand.length() != previousLength || commandCursorPos != previousCursorPos){
         drawCommandBar(currentCommand);
     }
 
@@ -39,6 +79,10 @@ bool readKeyboard(String& text) {
     }
 
     Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
+    if (keyboardEventIsDebounced(keys)) {
+        return false;
+    }
+
     if (keys.fn) {                              //fn held, treat this as a scroll/shortcut combo instead of text entry
         if (keysContainChar(keys, ';')) {       //fn + ; scrolls the terminal history down
             scrollHistory(1);
@@ -91,8 +135,14 @@ bool readKeyboard(String& text) {
         }
     } else {
         // Insert normal characters at the cursor position.
+        text.reserve(text.length() + keys.word.size());
         for (char character : keys.word) {
-            text = text.substring(0, commandCursorPos) + character + text.substring(commandCursorPos);
+            int oldLength = text.length();
+            text += ' ';
+            for (int i = oldLength; i > commandCursorPos; i--) {
+                text.setCharAt(i, text[i - 1]);
+            }
+            text.setCharAt(commandCursorPos, character);
             commandCursorPos++;
         }
     }
@@ -124,6 +174,9 @@ bool readRawKeyBytes(String& outBytes, bool& escapePressed, bool& backspacePress
     }
 
     Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
+    if (keyboardEventIsDebounced(keys)) {
+        return false;
+    }
 
     if (keys.fn) {                              //fn combos stay local -- scrolling and the escape chord, never sent to the remote
         if (keysContainChar(keys, ';')) {

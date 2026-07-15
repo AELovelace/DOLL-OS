@@ -1,15 +1,49 @@
 //   terminal.ino
 //   handles system-related features for DollOS
 //my proudest achievement
+
+static int spriteCharWidth(LGFX_Sprite& sprite, char ch) {
+    char glyph[2] = { ch, '\0' };
+    return (int)sprite.textWidth(glyph);
+}
+
+static int spriteTextWidthRange(LGFX_Sprite& sprite, const String& text, int start, int end) {
+    int clampedStart = constrain(start, 0, (int)text.length());
+    int clampedEnd = constrain(end, clampedStart, (int)text.length());
+    int width = 0;
+
+    for (int i = clampedStart; i < clampedEnd; i++) {
+        width += spriteCharWidth(sprite, text[i]);
+    }
+    return width;
+}
+
+static void drawSpriteTextRange(LGFX_Sprite& sprite, const String& text, int start, int x, int y, int maxWidth) {
+    int cursorX = x;
+    int limitX = x + maxWidth;
+
+    for (int i = constrain(start, 0, (int)text.length()); i < text.length(); i++) {
+        char glyph[2] = { text[i], '\0' };
+        int glyphWidth = (int)sprite.textWidth(glyph);
+        if (cursorX + glyphWidth > limitX) {
+            break;
+        }
+        sprite.drawString(glyph, cursorX, y);
+        cursorX += glyphWidth;
+    }
+}
+
 //status bar management
 void statusManagement(){
     //check battery if it's been more than 60 ticks
     if(refreshCounter >= 60){
         batteryPercent = M5Cardputer.Power.getBatteryLevel();               //get batteryPercent  
         batteryMillivolts = M5Cardputer.Power.getBatteryVoltage();          //get battery voltage   
-        String batteryText = ("FREEMEM:" + String(ESP.getFreeHeap()/1000) +"KB " 
-                            + "B:" + String(batteryPercent) + "% "   //battery indicator string construction
-                            + String(batteryMillivolts/1000.0f) + "V");    
+        char batteryText[48];
+        snprintf(batteryText, sizeof(batteryText), "FREEMEM:%luKB B:%d%% %.2fV",
+            (unsigned long)(ESP.getFreeHeap() / 1000),
+            batteryPercent,
+            batteryMillivolts / 1000.0f);
         //draw Dollputer banner
         statusBarSprite.fillSprite(BLACK);                                  //fill sprite area with black
         statusBarSprite.setTextDatum(top_left);                             //text align top-left
@@ -103,15 +137,18 @@ void addWrappedHistoryLine(const String& line, uint16_t color) {
     }
 
     String row = "";    //build temporary string to store row in.
+    row.reserve(min((int)line.length(), HISTORY_ROW_MAX_CHARS - 1));
+    int rowWidth = 0;
 
     for(int i = 0; i < line.length(); i++){
         char ch = line[i]; //get character at index i
-        String candidate = row + ch;
+        int charWidth = spriteCharWidth(terminalSprite, ch);
 
         //if adding this character exceeds the row width
-        if(row.length() > 0 && terminalSprite.textWidth(candidate) > maxWidth){
+        if(row.length() > 0 && rowWidth + charWidth > maxWidth){
             addHistoryRow(row, color);
             row = "";
+            rowWidth = 0;
 
             //skip leading space on next row
             if (ch == ' '){
@@ -120,6 +157,7 @@ void addWrappedHistoryLine(const String& line, uint16_t color) {
         }
 
         row += ch;
+        rowWidth += charWidth;
     }
 
     addHistoryRow(row, color); //add any remaining text as a new row
@@ -352,21 +390,20 @@ void drawCommandBar(const String& prompt, const String& text) {
         commandScrollOffset = commandCursorPos;
     }
     //scroll right so the cursor is never right of the visible window
-    while (commandBarSprite.textWidth(text.substring(commandScrollOffset, commandCursorPos)) > maxWidth) {
+    while (spriteTextWidthRange(commandBarSprite, text, commandScrollOffset, commandCursorPos) > maxWidth) {
         commandScrollOffset++;
     }
     //pull the window back left while there's still room, so deleting text reveals earlier characters again
     while (commandScrollOffset > 0 &&
-           commandBarSprite.textWidth(text.substring(commandScrollOffset - 1, commandCursorPos)) <= maxWidth) {
+           spriteTextWidthRange(commandBarSprite, text, commandScrollOffset - 1, commandCursorPos) <= maxWidth) {
         commandScrollOffset--;
     }
     commandScrollOffset = constrain(commandScrollOffset, 0, (int)text.length());
 
-    String visible = text.substring(commandScrollOffset);
-    commandBarSprite.drawString(visible, textX, COMMAND_BAR_PADDING);
+    drawSpriteTextRange(commandBarSprite, text, commandScrollOffset, textX, COMMAND_BAR_PADDING, maxWidth);
 
     //draw a beam cursor at the current position within the visible text
-    int cursorX = textX + commandBarSprite.textWidth(text.substring(commandScrollOffset, commandCursorPos));
+    int cursorX = textX + spriteTextWidthRange(commandBarSprite, text, commandScrollOffset, commandCursorPos);
     commandBarSprite.drawFastVLine(cursorX, COMMAND_BAR_PADDING, 10, WHITE);
 
     commandBarSprite.pushSprite(0,commandBarY());

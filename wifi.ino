@@ -6,9 +6,23 @@
 //path of the saved wifi credentials file on LittleFS
 const char* WIFI_CREDS_PATH = "/wifi.cfg";
 
+static bool wifiStaModeEnabled = false;
+
+static void ensureWifiStaMode() {
+    if (wifiStaModeEnabled) {
+        return;
+    }
+
+    recordHeapCheckpoint("wifi pre-mode");
+    WiFi.mode(WIFI_STA);
+    wifiStaModeEnabled = true;
+    recordHeapCheckpoint("wifi post-mode");
+}
+
 void scanWifiNetworks() {
-    WiFi.mode(WIFI_STA);    //station mode, needed before WiFi.scanNetworks() will work
+    ensureWifiStaMode();    //station mode, needed before WiFi.scanNetworks() will work
     WiFi.scanDelete();      //clear wifi scan state
+    recordHeapCheckpoint("wifi pre-scan");
     addWrappedHistoryLine("Scanning for Wifi Networks");
     drawTerminalHistory();  //draw before blocking wifi scan begins. 
 
@@ -54,11 +68,12 @@ void scanWifiNetworks() {
                         
     }
     WiFi.scanDelete();
+    recordHeapCheckpoint("wifi post-scan");
 }
 
 void showWifiStatus() {
     // Put the radio in station mode so normal client networking works.
-    WiFi.mode(WIFI_STA);
+    ensureWifiStaMode();
     // If we are not connected, print a short status message and stop.
     if (wifiIsConnected() == 0) {
         addWrappedHistoryLine("WiFi: not connected");
@@ -75,7 +90,7 @@ void showWifiStatus() {
 // That is fine for a first pass in a small terminal OS.
 void connectWifiNetwork(const String& ssid, const String& password) {
     // Put the radio in station mode before attempting a client connection.
-    WiFi.mode(WIFI_STA);
+    ensureWifiStaMode();
 
     // Tell the user what we are trying to do.
     addWrappedHistoryLine("Connecting to: " + ssid);
@@ -83,7 +98,9 @@ void connectWifiNetwork(const String& ssid, const String& password) {
 
     // Start the connection attempt.
     // c_str() converts Arduino String into the C-style text WiFi.begin expects.
+    recordHeapCheckpoint("wifi pre-begin");
     WiFi.begin(ssid.c_str(), password.c_str());
+    recordHeapCheckpoint("wifi post-begin");
 
     // Wait up to 15 seconds for a result.
     const unsigned long timeoutMs = 15000;
@@ -99,8 +116,10 @@ void connectWifiNetwork(const String& ssid, const String& password) {
 
     // Check whether the connection actually succeeded.
     if (wifiIsConnected() == 1) {
+        recordHeapCheckpoint("wifi connected");
         wifiStatus();
     } else {
+        recordHeapCheckpoint("wifi connect fail");
         addWrappedHistoryLine("WiFi connect failed");
     }
 }
