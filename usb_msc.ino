@@ -12,30 +12,116 @@
 
 USBMSC msc;
 bool mscStarted = false;   //true once vendorID/callbacks/msc.begin()/USB.begin() have run (only ever needs to happen once)
+static uint8_t* mscSectorScratch = nullptr;
+static uint32_t mscSectorScratchSize = 0;
+
+static bool ensureMscScratch(uint32_t sectorSize) {
+    if (mscSectorScratchSize >= sectorSize && mscSectorScratch != nullptr) {
+        return true;
+    }
+
+    uint8_t* resizedScratch = (uint8_t*)realloc(mscSectorScratch, sectorSize);
+    if (resizedScratch == nullptr) {
+        return false;
+    }
+
+    mscSectorScratch = resizedScratch;
+    mscSectorScratchSize = sectorSize;
+    return true;
+}
 
 static int32_t onMscRead(uint32_t lba, uint32_t offset, void* buffer, uint32_t bufsize) {
     uint32_t secSize = SD.sectorSize();
-    if (!secSize) {
+    if (!secSize || offset >= secSize) {
         return -1;
     }
-    for (uint32_t i = 0; i < bufsize / secSize; i++) {
-        if (!SD.readRAW((uint8_t*)buffer + (i * secSize), lba + i)) {
+
+    if (bufsize == 0) {
+        return 0;
+    }
+
+    if (offset == 0 && (bufsize % secSize) == 0) {
+        for (uint32_t i = 0; i < bufsize / secSize; i++) {
+            if (!SD.readRAW((uint8_t*)buffer + (i * secSize), lba + i)) {
+                return -1;
+            }
+        }
+        return bufsize;
+    }
+
+    if (!ensureMscScratch(secSize)) {
+        return -1;
+    }
+
+    uint8_t* out = (uint8_t*)buffer;
+    uint32_t remaining = bufsize;
+    uint32_t currentLba = lba;
+    uint32_t currentOffset = offset;
+
+    while (remaining > 0) {
+        if (!SD.readRAW(mscSectorScratch, currentLba)) {
             return -1;
         }
+
+        uint32_t chunkSize = min(remaining, secSize - currentOffset);
+        memcpy(out, mscSectorScratch + currentOffset, chunkSize);
+
+        out += chunkSize;
+        remaining -= chunkSize;
+        currentLba++;
+        currentOffset = 0;
     }
+
     return bufsize;
 }
 
 static int32_t onMscWrite(uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t bufsize) {
     uint32_t secSize = SD.sectorSize();
-    if (!secSize) {
+    if (!secSize || offset >= secSize) {
         return -1;
     }
-    for (uint32_t i = 0; i < bufsize / secSize; i++) {
-        if (!SD.writeRAW(buffer + (i * secSize), lba + i)) {
+
+    if (bufsize == 0) {
+        return 0;
+    }
+
+    if (offset == 0 && (bufsize % secSize) == 0) {
+        for (uint32_t i = 0; i < bufsize / secSize; i++) {
+            if (!SD.writeRAW(buffer + (i * secSize), lba + i)) {
+                return -1;
+            }
+        }
+        return bufsize;
+    }
+
+    if (!ensureMscScratch(secSize)) {
+        return -1;
+    }
+
+    uint8_t* in = buffer;
+    uint32_t remaining = bufsize;
+    uint32_t currentLba = lba;
+    uint32_t currentOffset = offset;
+
+    while (remaining > 0) {
+        uint32_t chunkSize = min(remaining, secSize - currentOffset);
+        if (currentOffset != 0 || chunkSize != secSize) {
+            if (!SD.readRAW(mscSectorScratch, currentLba)) {
+                return -1;
+            }
+        }
+
+        memcpy(mscSectorScratch + currentOffset, in, chunkSize);
+        if (!SD.writeRAW(mscSectorScratch, currentLba)) {
             return -1;
         }
+
+        in += chunkSize;
+        remaining -= chunkSize;
+        currentLba++;
+        currentOffset = 0;
     }
+
     return bufsize;
 }
 
