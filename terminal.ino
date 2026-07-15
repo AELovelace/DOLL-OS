@@ -47,21 +47,46 @@ static int historyPhysicalIndex(int logicalIndex) {
     return (historyHead + logicalIndex) % HISTORY_MAX_LINES;
 }
 
+static void copyHistoryText(char* dest, const String& src) {
+    int copyLen = min((int)src.length(), HISTORY_ROW_MAX_CHARS - 1);
+
+    for (int i = 0; i < copyLen; i++) {
+        dest[i] = src[i];
+    }
+    dest[copyLen] = '\0';
+
+    if (src.length() >= HISTORY_ROW_MAX_CHARS && HISTORY_ROW_MAX_CHARS > 4) {
+        dest[HISTORY_ROW_MAX_CHARS - 4] = '.';
+        dest[HISTORY_ROW_MAX_CHARS - 3] = '.';
+        dest[HISTORY_ROW_MAX_CHARS - 2] = '.';
+        dest[HISTORY_ROW_MAX_CHARS - 1] = '\0';
+    }
+}
+
+static const char* historyRowText(int logicalIndex) {
+    return historyRows[historyPhysicalIndex(logicalIndex)].text;
+}
+
+static uint16_t historyRowColor(int logicalIndex) {
+    return historyRows[historyPhysicalIndex(logicalIndex)].color;
+}
+
 void addHistoryRow(const String& row, uint16_t color) {
     //a brand-new row is about to become "the last row" through the normal (non-streaming) path --
     //any stream that still thought it owned the previous last row doesn't anymore
     terminalOpenRowOwner = nullptr;
 
+    int slot;
     if (historyCount < HISTORY_MAX_LINES) {             //if history count is less than max lines, add to history.
-        int slot = historyPhysicalIndex(historyCount);
-        historyLines[slot] = row;                       //add to history array
-        historyColors[slot] = color;                    //remember its color alongside it
+        slot = historyPhysicalIndex(historyCount);
         historyCount++;
     } else {
-        historyLines[historyHead] = row;                //overwrite the oldest physical slot
-        historyColors[historyHead] = color;
+        slot = historyHead;
         historyHead = (historyHead + 1) % HISTORY_MAX_LINES;
     }
+
+    copyHistoryText(historyRows[slot].text, row);
+    historyRows[slot].color = color;
     //scrollOffset is intentionally left untouched here -- forcing it to 0 on every row would
     //yank a user who's scrolled back to read history down to the bottom on every new line
 }
@@ -108,8 +133,8 @@ void updateLastHistoryRow(const String& row, uint16_t color) {
         return;
     }
     int lastSlot = historyPhysicalIndex(historyCount - 1);
-    historyLines[lastSlot] = row;
-    historyColors[lastSlot] = color;
+    copyHistoryText(historyRows[lastSlot].text, row);
+    historyRows[lastSlot].color = color;
     //scrollOffset intentionally left untouched -- see addHistoryRow
 }
 
@@ -217,8 +242,7 @@ void terminalStreamEraseToEnd(TerminalStreamState& st) {
         return;
     }
     st.pendingRow.remove(st.cursorCol);
-    int lastSlot = historyPhysicalIndex(historyCount - 1);
-    updateLastHistoryRow(st.pendingRow, historyColors[lastSlot]);
+    updateLastHistoryRow(st.pendingRow, historyRowColor(historyCount - 1));
 }
 
 //erases the character just before this stream's write cursor -- call when a live byte stream
@@ -234,8 +258,7 @@ void terminalStreamBackspace(TerminalStreamState& st) {
     }
     st.cursorCol--;
     st.pendingRow.remove(st.cursorCol, 1);
-    int lastSlot = historyPhysicalIndex(historyCount - 1);
-    updateLastHistoryRow(st.pendingRow, historyColors[lastSlot]);
+    updateLastHistoryRow(st.pendingRow, historyRowColor(historyCount - 1));
 }
 
 void scrollHistory(int delta) {
@@ -263,9 +286,8 @@ void drawTerminalHistory() {
 
     int y = TERMINAL_PADDING;
     for (int i = firstLine; i <= lastLine; i++) {
-        int slot = historyPhysicalIndex(i);
-        terminalSprite.setTextColor(historyColors[slot], BLACK);
-        terminalSprite.drawString(historyLines[slot], TERMINAL_PADDING, y);
+        terminalSprite.setTextColor(historyRowColor(i), BLACK);
+        terminalSprite.drawString(historyRowText(i), TERMINAL_PADDING, y);
         y += lineHeight;
     }
     terminalSprite.setTextColor(WHITE, BLACK);   //reset so anything drawing without its own color call gets the default

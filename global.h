@@ -56,9 +56,13 @@ int heapCheckpointCount = 0;
 //terminal
 const int TERMINAL_PADDING = 4;             //pixel padding around the terminal history text
 const int HISTORY_MAX_LINES = 120;          //max rows kept in historyLines before old rows get shifted out
+const int HISTORY_ROW_MAX_CHARS = 96;       //max characters kept per wrapped terminal row, including the trailing NUL
 LGFX_Sprite terminalSprite(&M5Cardputer.Display);   //offscreen buffer the terminal history gets drawn to before pushing
-String historyLines[HISTORY_MAX_LINES];     //ring-ish buffer of wrapped terminal history rows
-uint16_t historyColors[HISTORY_MAX_LINES];  //text color for each row in historyLines, parallel array
+struct HistoryRow {
+    char text[HISTORY_ROW_MAX_CHARS];
+    uint16_t color = WHITE;
+};
+HistoryRow historyRows[HISTORY_MAX_LINES];  //ring buffer of wrapped terminal history rows with inline storage
 int historyCount = 0;                       //number of valid rows currently in historyLines
 int historyHead = 0;                        //physical slot of the oldest logical history row in the ring buffer
 int scrollOffset = 0;                       //how many rows back from the newest line the view is scrolled
@@ -95,7 +99,7 @@ struct TerminalStreamState {
                                  //idiom remote chat/line-editor software (e.g. telehack's relay) uses to redraw a line
 };
 
-//which TerminalStreamState currently "owns" the last row in historyLines/historyColors, i.e. may
+//which TerminalStreamState currently "owns" the last row in historyRows, i.e. may
 //keep extending it via updateLastHistoryRow. nullptr = no stream owns an open row right now.
 //Uses each caller's own state-struct address as a lightweight token -- no ID registry needed,
 //works for any future caller automatically.
