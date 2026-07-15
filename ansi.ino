@@ -16,6 +16,7 @@
 //colors. Only foreground colors + reset are handled -- bold/underline/background/etc.
 //have no representation in a single-color-per-row model, so they're accepted (so the
 //sequence still gets consumed) and otherwise ignored.
+//STUB :(
 static uint16_t ansiSgrColor(int code, uint16_t defaultColor) {
     switch (code) {
         case 0:               return defaultColor;   //reset

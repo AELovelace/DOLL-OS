@@ -1,7 +1,7 @@
 //   RemoteSession.ino
 //   shared modal loop for character-oriented remote sessions -- see the RemoteSession class
 //   declaration in global.h for what this is and why it's declared there instead of here.
-
+//stub. refine later
 void RemoteSession::run() {
     commandCursorPos = 0;   //no local editable buffer during a raw session; keeps drawInputRow's cursor bar sane
     drawTerminalHistory();

@@ -4,7 +4,7 @@
 //   (https://github.com/ewpa/libssh-esp32), a libssh port built against ESP-IDF's
 //   existing mbedtls, so this file only wires it into DOLL-OS's terminal history /
 //   keyboard input path -- the same modal pattern motoko.ino uses for PubSubClient.
-
+// vibe stub. works tho
 #include "libssh_esp32.h"   //Arduino/ESP32 glue; must precede libssh.h per the library's own examples
 #include <libssh/libssh.h>
 

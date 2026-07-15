@@ -3,7 +3,7 @@
 //   just a raw socket wired into the same modal keyboard/terminal pattern ssh.ino
 //   and motoko.ino use, plus just enough IAC option negotiation (RFC 854/855) that
 //   well-behaved servers stop spamming control bytes into the terminal history.
-
+//  vibe stub. works tho
 static const int TELNET_DEFAULT_PORT = 23;
 static const long TELNET_CONNECT_TIMEOUT_SEC = 8;   //bounds the blocking client.connect() call
 

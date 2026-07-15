@@ -90,8 +90,9 @@ void helpCommandHandler(const String parts[], int partCount) {
 
 //sorted alphabetically for readability; lookup is a linear scan since the table is tiny
 static const CommandEntry commandTable[] = {
+    { "calc",   handleCalcCommand },
     { "cd",     handleCdCommand },
-    { "dice",     handleDiceCommand },
+    { "dice",   handleDiceCommand },
     { "help",   helpCommandHandler },
     { "ip",     handleIpCommand },
     { "ls",     handleLsCommand },

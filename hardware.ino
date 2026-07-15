@@ -110,6 +110,7 @@ bool readKeyboard(String& text) {
 //escapePressed is set instead when the user hit the local Fn+Q "disconnect" chord; backspacePressed
 //is set instead when the user hit backspace/delete -- callers translate that to the right byte(s)
 //for their transport via RemoteSession::backspaceBytes() rather than a byte hardcoded here.
+//vibe stub. i got overwhelmed and opened vscode. 
 bool readRawKeyBytes(String& outBytes, bool& escapePressed, bool& backspacePressed) {
     outBytes = "";
     escapePressed = false;
