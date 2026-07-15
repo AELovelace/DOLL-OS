@@ -120,8 +120,8 @@ void commandProcessor(String& command) {
     trimmedEntered.trim();
     addCommandHistory(trimmedEntered);   //remember this command for ctrl+;/ctrl+. recall
 
-    String parts[4];
-    int partCount = splitCommand(entered, parts, 4);
+    String parts[8];
+    int partCount = splitCommand(entered, parts, 8);
     //if no parts, stop here.
     if (partCount == 0) {
         return;
