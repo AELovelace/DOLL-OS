@@ -368,7 +368,11 @@ check.
 int splitCommand(const String& input, String parts[], int maxParts);
 ```
 Space-delimited tokenizer, trims leading/trailing whitespace, stops at
-`maxParts` tokens. The shell calls this with `maxParts = 4`.
+`maxParts` tokens. Tokens wrapped in `"..."` or `'...'` are treated as a
+single argument (quotes stripped, spaces inside preserved) — e.g.
+`ssh "my host" user` yields `my host` as one token. An unterminated quote
+just consumes the rest of the input as that token. The shell calls this
+with `maxParts = 8`.
 
 ```cpp
 void addCommandHistory(const String& cmd);

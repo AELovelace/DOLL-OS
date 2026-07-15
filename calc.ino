@@ -1,3 +1,5 @@
+// you can tell i made this cause it's lowk shit. 
+
 #include "tinyexpr.h"
 
 void handleCalcCommand(const String parts[], int partCount){
@@ -37,11 +39,11 @@ void showCalcHelp(int helpMsg){
             calcHelpMsg[0] = "Supported Functions";             calcLineColor[0]=PINK;
             calcHelpMsg[1] = "BASIC: + - * / ^ %";              calcLineColor[1]=WHITE;
             calcHelpMsg[2] = "abs acos asin atan atan2 ceil";   calcLineColor[2]=WHITE;
-            calcHelpMsg[3] = "cos cosh exp floor ln log";       calcLineColor[2]=WHITE;
-            calcHelpMsg[4] = "log10 pow sin sinh sqrt tan";     calcLineColor[2]=WHITE;
-            calcHelpMsg[5] = "tanh";                            calcLineColor[2]=WHITE;
-            calcHelpMsg[6] = "SPACES NOT SUPPORTED";            calcLineColor[2]=CYAN;
-            calcHelpMsg[7] = "POWERED BY codeplea/tinyexpr";    calcLineColor[2]=YELLOW;
+            calcHelpMsg[3] = "cos cosh exp floor ln log";       calcLineColor[3]=WHITE;
+            calcHelpMsg[4] = "log10 pow sin sinh sqrt tan";     calcLineColor[4]=WHITE;
+            calcHelpMsg[5] = "tanh";                            calcLineColor[5]=WHITE;
+            calcHelpMsg[6] = "SPACES NOT SUPPORTED, USE ' '";   calcLineColor[6]=CYAN;
+            calcHelpMsg[7] = "POWERED BY codeplea/tinyexpr";    calcLineColor[7]=YELLOW;
             break;
         case 2:
             calcHelpMsg[0] = "only two arguments, no spaces";   calcLineColor[0]=RED;
