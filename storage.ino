@@ -149,3 +149,51 @@ void handleCdCommand(const String parts[], int partCount) {
 void handlePwdCommand(const String parts[], int partCount) {
     addWrappedHistoryLine(cwd);
 }
+
+//handles the "cat" command; prints a text file into terminal history.
+void handleCatCommand(const String parts[], int partCount) {
+    if (partCount < 2) {
+        addWrappedHistoryLine("Usage: cat <file>");
+        return;
+    }
+
+    String target = parts[1];
+    String resolved = resolvePath(cwd, target);
+    RoutedPath r = routePath(resolved);
+
+    if (r.isSd && !sdCardMounted) {
+        addWrappedHistoryLine("SD not mounted (insert card and reboot)");
+        return;
+    }
+
+    File file = r.fs->open(r.realPath, "r");
+    if (!file) {
+        addWrappedHistoryLine("cat: " + resolved + " not found");
+        return;
+    }
+
+    if (file.isDirectory()) {
+        addWrappedHistoryLine("cat: " + resolved + " is a directory");
+        file.close();
+        return;
+    }
+
+    if (file.size() == 0) {
+        addWrappedHistoryLine("(empty)");
+        file.close();
+        return;
+    }
+
+    while (file.available()) {
+        String line = file.readStringUntil('\n');
+
+        // readStringUntil('\n') can leave a trailing '\r' on CRLF files.
+        if (line.endsWith("\r")) {
+            line.remove(line.length() - 1);
+        }
+
+        addWrappedHistoryLine(line);
+    }
+
+    file.close();
+}
