@@ -66,6 +66,10 @@ bool keysContainChar(const Keyboard_Class::KeysState& keys, char target) {
     return false;
 }
 
+static bool keysContainAnyChar(const Keyboard_Class::KeysState& keys, char first, char second) {
+    return keysContainChar(keys, first) || keysContainChar(keys, second);
+}
+
 //read the keyboard, appends to text in place and returns true once enter is pressed
 bool readKeyboard(String& text) {
     //M5Cardputer.update();
@@ -83,14 +87,16 @@ bool readKeyboard(String& text) {
         return false;
     }
 
-    if (keys.fn) {                              //fn held, treat this as a scroll/shortcut combo instead of text entry
-        if (keysContainChar(keys, ';')) {       //fn + ; scrolls the terminal history down
-            scrollHistory(1);
+    if (keys.fn) {                              //fn held, treat this as a local shortcut combo instead of text entry
+        if (keysContainAnyChar(keys, ';', ':')) {   //fn + up recalls older commands, regardless of shifted report variant
+            recallCommandHistory(-1, text);
+            commandCursorPos = text.length();   //jump cursor to end of recalled text, like a shell
             return false;
         }
 
-        if (keysContainChar(keys, '.')) {       //fn + . scrolls the terminal history up
-            scrollHistory(-1);
+        if (keysContainAnyChar(keys, '.', '>')) {   //fn + down recalls newer commands, regardless of shifted report variant
+            recallCommandHistory(1, text);
+            commandCursorPos = text.length();   //jump cursor to end of recalled text, like a shell
             return false;
         }
 
@@ -110,17 +116,14 @@ bool readKeyboard(String& text) {
         return false; // Ignore other function key combinations for now
     }
 
-    if (keys.ctrl) {                            //ctrl held, recall previously sent commands instead of typing
-        //the driver reports the shifted variant ('>' / ':') while ctrl is held, not the bare '.' / ';'
-        if (keysContainChar(keys, ':')) {       //ctrl + ; recalls older commands, like pressing up in a shell
-            recallCommandHistory(-1, text);
-            commandCursorPos = text.length();   //jump cursor to end of recalled text, like a shell
+    if (keys.ctrl) {                            //ctrl held, use the physical up/down keys to scroll terminal history
+        if (keysContainAnyChar(keys, ';', ':')) {   //ctrl + up scrolls the terminal history down
+            scrollHistory(1);
             return false;
         }
 
-        if (keysContainChar(keys, '>')) {       //ctrl + . recalls newer commands, like pressing down in a shell
-            recallCommandHistory(1, text);
-            commandCursorPos = text.length();   //jump cursor to end of recalled text, like a shell
+        if (keysContainAnyChar(keys, '.', '>')) {   //ctrl + down scrolls the terminal history up
+            scrollHistory(-1);
             return false;
         }
         return false; // Ignore other ctrl combinations for now
@@ -178,18 +181,23 @@ bool readRawKeyBytes(String& outBytes, bool& escapePressed, bool& backspacePress
         return false;
     }
 
-    if (keys.fn) {                              //fn combos stay local -- scrolling and the escape chord, never sent to the remote
-        if (keysContainChar(keys, ';')) {
-            scrollHistory(1);
-        } else if (keysContainChar(keys, '.')) {
-            scrollHistory(-1);
-        } else if (keysContainChar(keys, 'q')) {
+    if (keys.fn) {                              //fn combos stay local; raw remote sessions have no local command history to recall
+        if (keysContainChar(keys, 'q')) {
             escapePressed = true;
         }
         return false;
     }
 
-    if (keys.ctrl) {                            //forward ctrl+letter as its control byte (ctrl+c -> 0x03, etc.) --
+    if (keys.ctrl) {                            //ctrl keeps its normal control-byte behavior, except the physical up/down pair
+        if (keysContainAnyChar(keys, ';', ':')) {
+            scrollHistory(1);
+            return false;
+        }
+        if (keysContainAnyChar(keys, '.', '>')) {
+            scrollHistory(-1);
+            return false;
+        }
+        //forward ctrl+letter as its control byte (ctrl+c -> 0x03, etc.) --
         for (char c : keys.word) {              //remote shells and telehack alike rely on these for signals/line-editing
             char lower = tolower((unsigned char)c);
             if (lower >= 'a' && lower <= 'z') {

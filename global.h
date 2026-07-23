@@ -16,7 +16,7 @@ const int COMMAND_BAR_HEIGHT = 24;       //pixel height of the command bar at th
 const int COMMAND_BAR_PADDING = 4;       //pixel padding inside the command bar
 LGFX_Sprite commandBarSprite(&M5Cardputer.Display);   //offscreen buffer the command bar gets drawn to before pushing
 
-//command history (sent commands, recalled with ctrl+;/ctrl+. like a shell's up/down arrows)
+//command history (sent commands, recalled with fn+;/fn+. like a shell's up/down arrows)
 const int COMMAND_HISTORY_MAX = 30;          //max previously sent commands remembered
 String commandHistory[COMMAND_HISTORY_MAX];  //oldest at index 0, newest at commandHistoryCount - 1
 int commandHistoryCount = 0;                 //number of valid entries in commandHistory

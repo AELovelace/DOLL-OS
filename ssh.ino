@@ -154,7 +154,7 @@ void runSshBlocking(void* sessionPtr, const String& user) {
         M5Cardputer.update();
         delay(10);
 
-        bool enterPressed = readKeyboard(sshInputBuffer);   //shared input handler; also services Fn+;/Fn+. scrolling
+        bool enterPressed = readKeyboard(sshInputBuffer);   //shared input handler; also services Fn+;/Fn+. recall and Ctrl+;/Ctrl+. scrolling
 
         if (enterPressed) {
             if (sshInputBuffer == "/quit") {

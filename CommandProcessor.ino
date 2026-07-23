@@ -141,7 +141,7 @@ void commandProcessor(String& command) {
 
     String trimmedEntered = entered;
     trimmedEntered.trim();
-    addCommandHistory(trimmedEntered);   //remember this command for ctrl+;/ctrl+. recall
+    addCommandHistory(trimmedEntered);   //remember this command for fn+;/fn+. recall
 
     String parts[8];
     int partCount = splitCommand(entered, parts, 8);

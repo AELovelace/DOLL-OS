@@ -111,9 +111,9 @@ Polls once, edits `text` in place (printable chars, backspace, cursor-move,
 history-recall chords), returns `true` when Enter was just pressed. This is
 the line-editor used by the top-level shell *and* by any modal app that wants
 buffered, editable local input (motoko's channel/message prompts, ssh's
-password prompt). Built-in chords while it owns input: `Fn+;`/`Fn+.` scroll
-history, `Fn+,`/`Fn+/` move the cursor, `Ctrl+;`/`Ctrl+.` recall previous/next
-sent commands.
+password prompt). Built-in chords while it owns input: `Fn+;`/`Fn+.` recall
+previous/next sent commands, `Fn+,`/`Fn+/` move the cursor, `Ctrl+;`/`Ctrl+.`
+scroll history.
 
 ```cpp
 bool readRawKeyBytes(String& outBytes, bool& escapePressed, bool& backspacePressed);
@@ -378,7 +378,7 @@ with `maxParts = 8`.
 void addCommandHistory(const String& cmd);
 void recallCommandHistory(int step, String& text);
 ```
-Back the shell's `Ctrl+;`/`Ctrl+.` up/down recall (`COMMAND_HISTORY_MAX = 30`
+Back the shell's `Fn+;`/`Fn+.` up/down recall (`COMMAND_HISTORY_MAX = 30`
 entries, oldest evicted first). Only relevant if you're building something
 that wants shell-style history recall of its own.
 

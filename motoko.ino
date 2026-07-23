@@ -112,7 +112,7 @@ void runMotokoBlocking() {
             }
         }
 
-        bool enterPressed = readKeyboard(motokoInputBuffer);   //shared input handler; also services Fn+;/Fn+. scrolling
+        bool enterPressed = readKeyboard(motokoInputBuffer);   //shared input handler; also services Fn+;/Fn+. recall and Ctrl+;/Ctrl+. scrolling
 
         if (enterPressed) {
             if (motokoInputBuffer == "/quit") {
