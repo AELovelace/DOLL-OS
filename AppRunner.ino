@@ -388,16 +388,23 @@ static String appStringOperand(String token, DappVar vars[], DappStringVar strin
 //   Fn+Q aborts a running app, matching the "this keystroke is local, get me out" chord ssh
 //   and telnet already use (readRawKeyBytes, hardware.ino).
 //
-//   Peek, don't consume: this reads keysState() without going through readKeyboard() or the
-//   debounce, so a keystroke that isn't Fn+Q is left untouched for whoever polls next -- during
-//   WAIT that's nobody, which is the pre-existing "apps don't read the keyboard" behaviour, and
-//   during INPUT it's the readKeyboard() call immediately below the check.
+//   Peek, don't consume -- and note what "consume" means on this keyboard. isChange() is
+//   destructive: it compares the held-key count against a latch and *updates the latch* on
+//   the call that reports true (M5Cardputer's Keyboard.cpp), so the first caller after each
+//   update() swallows the event and every later caller sees "no change". Calling it here
+//   silently ate every keystroke readKeyboard() was about to read, which looked like an INPUT
+//   prompt that wouldn't type.
+//
+//   isPressed() and keysState() have no such latch: updateKeysState() rebuilds the whole state
+//   from the currently-held keys on every M5Cardputer.update(), so this reads the live chord and
+//   leaves the change flag for readKeyboard() below. Level-triggered rather than edge-triggered,
+//   which is what you want from an abort anyway -- holding the chord cancels.
 //
 //   DS has no equivalent: it can always drop the telnet session. Here an app owns the device
 //   until it returns, so without this a WAIT loop or an INPUT prompt is only escapable by
 //   power-cycling -- which is also what made DS's 4000-step budget unsafe to port before now.
 static bool appCancelRequested() {
-    if (!M5Cardputer.Keyboard.isChange() || !M5Cardputer.Keyboard.isPressed()) {
+    if (!M5Cardputer.Keyboard.isPressed()) {
         return false;
     }
     Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
