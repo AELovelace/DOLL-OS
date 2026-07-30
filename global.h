@@ -38,6 +38,66 @@ struct RoutedPath {
     bool isSd;
 };
 
+//   Output color codes (Output.ino)
+//   These are ANSI SGR foreground codes, not pixel colors -- DOLL-OS renders to a
+//   sprite and has no terminal to send escape sequences to, so ansiCodeToPixelColor()
+//   maps them onto M5GFX uint16_t colors at the point of drawing. They exist in this
+//   indirect form so files ported from DS drop in unchanged: every DS call site says
+//   outLine(text, C_CYAN), and rewriting each one to CYAN by hand would be churn that
+//   makes the two trees stop diffing against each other. See docs/PORT-FROM-DS.md.
+const int C_RESET   = 0;
+const int C_WHITE   = 37;
+const int C_BLACK   = 30;
+const int C_RED     = 31;
+const int C_GREEN   = 32;
+const int C_YELLOW  = 33;
+const int C_BLUE    = 34;
+const int C_MAGENTA = 35;
+const int C_CYAN    = 36;
+const int C_PINK    = 95;   //bright magenta; stands in for the PINK accent color
+
+//   Editor (Edit.ino) -- the "edit" app's logical key vocabulary. Used only inside
+//   Edit.ino, but it still has to live here: the Arduino builder generates hoisted
+//   prototypes for that file's `static` functions too, and a prototype mentioning
+//   EditKey lands above Edit.ino's own definitions. Same trap, and the same fix, as
+//   RoutedPath and the Dapp* structs.
+//
+//   DS also declares an EditKeyState here for its ESC/CSI byte decoder. There is no
+//   such decoder in this port -- keystrokes arrive as a Keyboard_Class::KeysState from
+//   the physical keyboard, already decoded -- so that type has no counterpart.
+enum EditKey {
+    EK_NONE, EK_CHAR, EK_ENTER, EK_TAB, EK_BACKSPACE, EK_DELETE,
+    EK_LEFT, EK_RIGHT, EK_UP, EK_DOWN,
+    EK_HOME, EK_END, EK_PGUP, EK_PGDN,
+    EK_SAVE, EK_EXIT, EK_CANCEL,
+    EK_CUT, EK_UNCUT, EK_SEARCH, EK_GOTO, EK_UNDO, EK_HELP
+};
+
+//   .dapp script runtime (AppRunner.ino). These live here rather than in AppRunner.ino
+//   for the same reason RoutedPath does: the Arduino builder hoists auto-generated
+//   prototypes for a tab's static functions above that tab's own type definitions, so a
+//   prototype mentioning DappLine lands before the struct exists.
+struct DappLine {
+    String text;
+};
+
+struct DappLabel {
+    String name;
+    int lineIndex;
+};
+
+struct DappVar {
+    String name;
+    long value;
+    bool used;
+};
+
+struct DappStringVar {
+    String name;
+    String value;
+    bool used;
+};
+
 //status bar
 const int STATUS_BAR_HEIGHT = 14;   //pixel height of the top status bar
 LGFX_Sprite statusBarSprite(&M5Cardputer.Display);   //offscreen buffer the status bar gets drawn to before pushing
@@ -147,6 +207,12 @@ protected:
     //servers (e.g. telehack.com) implement their own line editor against the original ASCII
     //backspace (0x08) and may not recognize DEL as an erase request at all. Override per subclass.
     virtual String backspaceBytes() { return "\x7f"; }
+
+private:
+    //Fn+K handler (RemoteSession.ino) -- runs one shell command via commandProcessor()
+    //without ending the session. Not virtual: identical for every subclass, unlike
+    //pumpIncoming/isClosed/sendBytes which are transport-specific.
+    void runInlineCommandPrompt();
 };
 
 //dice

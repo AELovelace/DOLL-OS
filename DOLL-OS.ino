@@ -47,6 +47,12 @@
   //mount internal flash (LittleFS) and the SD card
   initStorage();
   recordHeapCheckpoint("after storage");
+
+  //   No Wi-Fi join here, deliberately. The radio stays off until "wifi connect" asks
+  //   for it -- the screen and keyboard are a complete UI without a network, and a
+  //   handheld that quietly reaches for an AP every time it powers on is not what this
+  //   is. maintainInternetConnection() in loop() only re-establishes a link the user
+  //   already made; see wifiUserWantsConnection in wifi.ino.
 }
 
 void loop() {
@@ -54,7 +60,9 @@ void loop() {
   M5Cardputer.update();             //update cardputer status
   statusManagement();               //run statusManagement adn construct system stats bar 
   drawTerminalHistory();            //draw term history
-  drawCommandBar(currentCommand);   //draw text input area
+  drawCommandBar(shellPrompt(), currentCommand);   //draw text input area, under the path-aware prompt
   keyboardLogic();                  //handle keyboard logic
+  ftpService();                     //one non-blocking FTP step while active (FtpServer.ino)
+  maintainInternetConnection();     //bounded reconnect tick if the AP went away (wifi.ino)
 
 }

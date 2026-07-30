@@ -37,8 +37,8 @@ static void drawSpriteTextRange(LGFX_Sprite& sprite, const String& text, int sta
 void statusManagement(){
     //check battery if it's been more than 60 ticks
     if(refreshCounter >= 60){
-        batteryPercent = M5Cardputer.Power.getBatteryLevel();               //get batteryPercent  
-        batteryMillivolts = M5Cardputer.Power.getBatteryVoltage();          //get battery voltage   
+        batteryPercent = readBatteryPercent();                              //get batteryPercent (hardware.ino)
+        batteryMillivolts = M5Cardputer.Power.getBatteryVoltage();          //get battery voltage
         char batteryText[48];
         snprintf(batteryText, sizeof(batteryText), "FREEMEM:%luKB B:%d%% %.2fV",
             (unsigned long)(ESP.getFreeHeap() / 1000),

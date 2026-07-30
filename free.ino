@@ -59,6 +59,14 @@ void reserveHotStrings() {
     }
 }
 
+//handles the "battery" command. DOLL-OS only ever surfaced this in the status bar and
+//motoko's /battery subcommand; DS promoted it to a top-level command, so it comes back here.
+void handleBatteryCommand(const String parts[], int partCount) {
+    int pct = readBatteryPercent();
+    float v = readBatteryVoltage();
+    outLine("Battery: " + String(pct) + "% (" + String(v, 2) + "V)", C_CYAN);
+}
+
 void handleFreeCommand(const String parts[], int partCount){
     if(partCount == 1){
         showFree();

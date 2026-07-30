@@ -1,0 +1,41 @@
+# Build profile for DOLL-OS. Select "stamps3" from the profile dropdown in the
+# Arduino IDE toolbar before Verify/Upload; arduino-cli picks it up automatically
+# (default_profile below).
+#
+# Selecting this profile replaces setting Tools > Board / Flash Size / Partition
+# Scheme / PSRAM / USB Mode by hand, and pins the exact library versions the sketch
+# was built against. See docs/PORT-FROM-DS.md, Phases 1 and 4.
+#
+# The three FQBN options that are NOT the board menu's own defaults, and why:
+#   PartitionScheme=custom  -> use this sketch's partitions.csv (6.375MB app slot,
+#                              1.5MB LittleFS) instead of the menu default's 4MB
+#                              layout, which strands half of an 8MB part.
+#   PSRAM=disabled          -> the StampS3 has none. Pinned so nothing defines
+#                              BOARD_HAS_PSRAM behind our back.
+#   USBMode=default         -> confusingly, this is the TinyUSB option. The menu
+#                              default is "hwcdc", under which usb_msc.ino's #error
+#                              fires and the sketch refuses to build at all.
+default_profile: stamps3
+
+profiles:
+  stamps3:
+    fqbn: esp32:esp32:m5stack_stamp_s3:FlashSize=8M,PartitionScheme=custom,PSRAM=disabled,USBMode=default,CDCOnBoot=cdc
+    platforms:
+      - platform: esp32:esp32 (3.3.10)
+    libraries:
+      # Everything is referenced by directory rather than by name/version so the
+      # build uses exactly what is already installed in the sketchbook, with no
+      # network fetch and no chance of a registry version drifting underneath.
+      #
+      # SimpleFTPServer is the one that MUST stay sketch-local: its storage backend
+      # (STORAGE_SD here, STORAGE_SD_MMC for DS) is baked into the library's own
+      # translation unit via FtpServerKey.h, so the two projects cannot share one
+      # copy. See libraries/SimpleFTPServer/FtpServerKey.h.
+      - dir: libraries/SimpleFTPServer
+      - dir: ../libraries/M5Cardputer
+      - dir: ../libraries/M5Unified
+      - dir: ../libraries/M5GFX
+      - dir: ../libraries/PubSubClient
+      - dir: ../libraries/LibSSH-ESP32
+      - dir: ../libraries/ESP32Ping
+      - dir: ../libraries/esp32ARP

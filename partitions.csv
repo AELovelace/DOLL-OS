@@ -1,0 +1,32 @@
+# Custom 8MB partition table for the M5Stamp-S3 (ESP32-S3FN8, 8MB flash, no PSRAM).
+#
+# Why not a stock scheme: the board menu's default (PartitionScheme=default) is a
+# 4MB layout with a 1.25MB app slot, which strands half the part. The next step up
+# (default_8MB) does span 8MB, but spends 3.19MB of it on an app1 OTA slot this
+# project never uses -- DOLL-OS is flashed over USB, not over the air.
+#
+# This keeps default_8MB's shape and its exact spiffs geometry, but drops app1 and
+# gives every reclaimed byte to the app:
+#   app0     6.375MB, ota_0 subtype (not "factory") so boot_app0.bin's slot-select
+#            still applies even with no app1/OTA present -- same trick as DS's table.
+#   spiffs   1.5MB, labelled "spiffs" because that's the partition label Arduino's
+#            LittleFS.begin() looks for by default; the contents are LittleFS
+#            (/wifi.cfg, /apps/*.dapp), not SPIFFS. Offset and size are byte-identical
+#            to default_8MB's, so migrating from that scheme preserves the contents.
+#   coredump esp_core_dump target, for postmortem on a crash via espcoredump.py.
+#
+# 0x10000 + 0x660000 = 0x670000 + 0x180000 = 0x7F0000 + 0x10000 = 0x800000 exactly.
+# No dead space. App partitions must stay 64KB-aligned if these are ever retuned.
+#
+# NOTE: this file is inert until the build selects PartitionScheme=custom (see
+# sketch.yaml / docs/PORT-FROM-DS.md Phase 1). Coming from the menu default
+# (PartitionScheme=default, spiffs at 0x290000) the LittleFS partition moves, so the
+# first boot afterwards formats it and /wifi.cfg is lost -- re-run
+# "wifi connect <ssid> <pass>" + "wifi save" once.
+#
+# Name,     Type, SubType,  Offset,    Size,      Flags
+nvs,        data, nvs,      0x9000,    0x5000,
+otadata,    data, ota,      0xe000,    0x2000,
+app0,       app,  ota_0,    0x10000,   0x660000,
+spiffs,     data, spiffs,   0x670000,  0x180000,
+coredump,   data, coredump, 0x7F0000,  0x10000,

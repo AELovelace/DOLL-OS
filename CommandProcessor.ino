@@ -105,24 +105,80 @@ struct CommandEntry {
 };
 
 void helpCommandHandler(const String parts[], int partCount) {
-    addWrappedHistoryLine("Commands: calc, cat, cd, clear, dice, free, help, ip, ls, motoko, ping, pwd, ssh, telnet, usb, wifi");
+    outLine("Commands: apps, battery, calc, cat, cd, clear, cp, del,");
+    outLine("          dice, edit, free, ftp, help, ip, ls, mkdir,");
+    outLine("          motoko, mv, ping, pwd, reboot, rm, run, ssh,");
+    outLine("          status, telnet, uptime, usb, wifi");
+}
+
+//reboots the board. Nothing is flushed first because nothing here is buffered --
+//LittleFS writes complete synchronously and the SD card is only ever written inside
+//a command that has already returned by the time this runs.
+void handleRebootCommand(const String parts[], int partCount) {
+    outLine("Restarting...");
+    drawTerminalHistory();   //ESP.restart() never returns to loop(), so paint the panel now --
+                              //otherwise a reboot gives no on-screen feedback at all
+    delay(500);
+    ESP.restart();
+}
+
+void handleUptimeCommand(const String parts[], int partCount) {
+    unsigned long totalSeconds = millis() / 1000;
+    unsigned long days = totalSeconds / 86400;
+    unsigned long hours = (totalSeconds % 86400) / 3600;
+    unsigned long minutes = (totalSeconds % 3600) / 60;
+    unsigned long seconds = totalSeconds % 60;
+
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Uptime: %lu days, %02lu:%02lu:%02lu", days, hours, minutes, seconds);
+    outLine(String(buf));
+}
+
+//one-screen summary of where the board stands on the network. Overlaps "wifi" deliberately:
+//"wifi" is the subcommand surface for changing things, "status" is the read-only glance.
+void handleStatusCommand(const String parts[], int partCount) {
+    outLine("");
+    outLine("Wi-Fi status", C_CYAN);
+    outLine("-----------");
+    if (wifiIsConnected() == 1) {
+        outLine("Router: connected");
+        outLine("Router SSID: " + WiFi.SSID());
+        outLine("Station IP: " + WiFi.localIP().toString());
+        outLine("Signal: " + String(WiFi.RSSI()) + " dBm");
+    } else {
+        outLine("Router: disconnected");
+    }
+    outLine("");
 }
 
 //sorted alphabetically for readability; lookup is a linear scan since the table is tiny
 static const CommandEntry commandTable[] = {
+    { "apps",   handleAppsCommand },
+    { "battery", handleBatteryCommand },
     { "calc",   handleCalcCommand },
     { "cat",    handleCatCommand },
     { "cd",     handleCdCommand },
+    { "cp",     handleCpCommand },
+    { "del",    handleDelCommand },
     { "dice",   handleDiceCommand },
+    { "edit",   handleEditCommand },
     { "free",   handleFreeCommand },
+    { "ftp",    handleFtpCommand },
     { "help",   helpCommandHandler },
     { "ip",     handleIpCommand },
     { "ls",     handleLsCommand },
+    { "mkdir",  handleMkdirCommand },
     { "motoko", handleMotokoCommand },
+    { "mv",     handleMvCommand },
     { "ping",   handlePingCommand },
     { "pwd",    handlePwdCommand },
+    { "reboot", handleRebootCommand },
+    { "rm",     handleRmCommand },
+    { "run",    handleRunCommand },
     { "ssh",    handleSshCommand },
+    { "status", handleStatusCommand },
     { "telnet", handleTelnetCommand },
+    { "uptime", handleUptimeCommand },
     { "usb",    handleUsbCommand },
     { "wifi",   handleWifiCommand },
 };
@@ -150,14 +206,12 @@ void commandProcessor(String& command) {
         return;
     }
     if (parts[0] == "clear") {    //clear wipes history without echoing itself
-        historyCount = 0;
-        historyHead = 0;
-        scrollOffset = 0;
-        terminalOpenRowOwner = nullptr;
+        outClearScreen();
         return;
     }
 
-    addWrappedHistoryLine("> " + entered);   //echo the command into the terminal history
+    echoCommandLine(trimmedEntered);   //echo the command into the terminal history, under
+                                        //the same path-aware prompt the command bar shows
 
     for (int i = 0; i < commandTableSize; i++) {
         if (parts[0] == commandTable[i].name) {
@@ -165,5 +219,5 @@ void commandProcessor(String& command) {
             return;
         }
     }
-    addWrappedHistoryLine("Unknown command: " + entered);   //fallback for anything not recognized above
+    outLine("Unknown command: " + entered, C_RED);   //fallback for anything not recognized above
 }

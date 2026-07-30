@@ -164,10 +164,11 @@ bool readKeyboard(String& text) {
 //is set instead when the user hit backspace/delete -- callers translate that to the right byte(s)
 //for their transport via RemoteSession::backspaceBytes() rather than a byte hardcoded here.
 //vibe stub. i got overwhelmed and opened vscode. 
-bool readRawKeyBytes(String& outBytes, bool& escapePressed, bool& backspacePressed) {
+bool readRawKeyBytes(String& outBytes, bool& escapePressed, bool& backspacePressed, bool& cmdModePressed) {
     outBytes = "";
     escapePressed = false;
     backspacePressed = false;
+    cmdModePressed = false;
 
     if (!M5Cardputer.Keyboard.isChange()) {
         return false;
@@ -184,6 +185,15 @@ bool readRawKeyBytes(String& outBytes, bool& escapePressed, bool& backspacePress
     if (keys.fn) {                              //fn combos stay local; raw remote sessions have no local command history to recall
         if (keysContainChar(keys, 'q')) {
             escapePressed = true;
+        }
+        //   Fn+K opens the inline command prompt (RemoteSession::runInlineCommandPrompt).
+        //   DS spells this chord Ctrl+K, but it has no Fn key -- here Fn is already the
+        //   established "this keystroke is local, don't send it" modifier (Fn+Q to detach,
+        //   Fn+;/. for history), and using it means every ctrl+letter byte stays available
+        //   to the remote. Ctrl+K in particular is kill-line in readline, which would be a
+        //   real thing to lose inside an ssh session.
+        if (keysContainChar(keys, 'k')) {
+            cmdModePressed = true;
         }
         return false;
     }
@@ -223,12 +233,20 @@ bool readRawKeyBytes(String& outBytes, bool& escapePressed, bool& backspacePress
     return outBytes.length() > 0;
 }
 
-//TODO: read battery percent from M5Cardputer.Power, mirrors statusManagement's inline read
-int batteryPercentCheck(){
-
+//   Battery reads. These were TODO stubs that fell through without returning a value
+//   (undefined behaviour if anything had ever called them); statusManagement() was reading
+//   M5Cardputer.Power inline instead. Named to match DS's SysInfo.ino so the code ported
+//   from there -- the "battery" command and the .dapp runtime's $battery builtin -- calls
+//   the same thing the status bar does.
+//
+//   Unlike DS, which has no fuel-gauge chip and estimates percent off a divided ADC pin,
+//   the Cardputer's M5Unified power driver reports both directly, so these are thin wrappers
+//   rather than approximations.
+int readBatteryPercent() {
+    return M5Cardputer.Power.getBatteryLevel();
 }
 
-//TODO: read battery millivolts from M5Cardputer.Power, mirrors statusManagement's inline read
-int batteryVoltCheck(){
-
+//volts, to match DS's signature -- M5Unified reports millivolts
+float readBatteryVoltage() {
+    return M5Cardputer.Power.getBatteryVoltage() / 1000.0f;
 }

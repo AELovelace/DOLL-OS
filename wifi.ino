@@ -15,8 +15,66 @@ static void ensureWifiStaMode() {
 
     recordHeapCheckpoint("wifi pre-mode");
     WiFi.mode(WIFI_STA);
+
+    //   Turn OFF the esp32 core's built-in auto-reconnect (it defaults to ON). Left on, a
+    //   failed join -- e.g. the config.h default SSID isn't present -- makes the driver spin
+    //   on association *forever* in the background, and a permanently-busy radio blocks
+    //   everything else: esp_wifi_scan_start() and esp_wifi_set_config() both fail outright
+    //   while the STA is mid-connect, so "wifi scan" fails instantly and "wifi connect" hits
+    //   "cannot set config". We drive our own reconnection instead
+    //   (maintainInternetConnection below, a bounded 10s tick), which leaves the radio idle
+    //   between attempts so scans and manual connects can get in. Ported from DS, where this
+    //   was diagnosed the hard way.
+    WiFi.setAutoReconnect(false);
+
+    //   Stop the core mirroring credentials into its own NVS copy. DOLL-OS keeps the
+    //   authoritative credentials in /wifi.cfg (saveWifiCredentials below), so the NVS
+    //   copy is both redundant and the one piece of state that could put the radio on
+    //   a network without anyone asking -- a later bare WiFi.begin() reuses it. Also
+    //   saves an NVS write on every connect.
+    //
+    //   This only stops *new* writes. If a previous build already stored an SSID there,
+    //   clear it once with "wifi forget".
+    WiFi.persistent(false);
+
     wifiStaModeEnabled = true;
     recordHeapCheckpoint("wifi post-mode");
+}
+
+//   Whether the user has asked to be on a network *this session*. Nothing sets this at
+//   boot -- DOLL-OS never joins a network unbidden. It flips true only after a "wifi
+//   connect" actually succeeds, and false again on "wifi disconnect".
+//
+//   maintainInternetConnection() below is gated on it, which is the whole point: without
+//   the gate, removing the boot-time join would accomplish nothing, because the reconnect
+//   tick would notice "not connected" and join anyway about ten seconds later.
+static bool wifiUserWantsConnection = false;
+
+//   Bounded reconnect tick, called every loop() pass. Re-establishes a connection the user
+//   already made and that dropped afterwards -- an AP rebooting, walking out of range and
+//   back. It does not initiate one. Retries at most every reconnectInterval, leaving the
+//   radio idle in between (see the setAutoReconnect note above for why that matters).
+unsigned long previousReconnectAttempt = 0;
+const unsigned long reconnectInterval = 10000;
+
+void maintainInternetConnection() {
+    if (!wifiUserWantsConnection) {
+        return;
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+        return;
+    }
+    if (millis() - previousReconnectAttempt < reconnectInterval) {
+        return;
+    }
+    previousReconnectAttempt = millis();
+
+    String ssid, password;
+    if (!loadWifiCredentials(ssid, password)) {
+        ssid = STA_DEFAULT_SSID;
+        password = STA_DEFAULT_PASSWORD;
+    }
+    WiFi.begin(ssid.c_str(), password.c_str());
 }
 
 void scanWifiNetworks() {
@@ -117,11 +175,35 @@ void connectWifiNetwork(const String& ssid, const String& password) {
     // Check whether the connection actually succeeded.
     if (wifiIsConnected() == 1) {
         recordHeapCheckpoint("wifi connected");
+        //   Arm the reconnect tick, but only now. Setting it on the *attempt* would mean a
+        //   typo'd SSID left the radio retrying a network that doesn't exist every 10s for
+        //   the rest of the session; setting it on success means the tick only ever
+        //   re-establishes something that demonstrably worked once.
+        wifiUserWantsConnection = true;
         wifiStatus();
     } else {
         recordHeapCheckpoint("wifi connect fail");
         addWrappedHistoryLine("WiFi connect failed");
     }
+}
+
+//   "wifi disconnect" -- drops the link and disarms the reconnect tick, so it stays down.
+void disconnectWifiNetwork() {
+    wifiUserWantsConnection = false;
+    WiFi.disconnect(false);   //radio stays initialized so "wifi scan" still works
+    addWrappedHistoryLine("WiFi disconnected");
+}
+
+//   "wifi forget" -- clears the ESP's own NVS copy of the last SSID/password. Nothing in
+//   DOLL-OS reads that copy (credentials live in /wifi.cfg), but a build from before
+//   WiFi.persistent(false) may have left one behind, and it is the only state that could
+//   still put the radio on a network without being asked. Leaves /wifi.cfg alone.
+void forgetWifiNvs() {
+    wifiUserWantsConnection = false;
+    ensureWifiStaMode();
+    WiFi.disconnect(false, true);   //eraseap = true
+    addWrappedHistoryLine("Cleared the radio's stored network");
+    addWrappedHistoryLine("(/wifi.cfg is untouched)");
 }
 
 // Save WiFi credentials to LittleFS so they can be reused after reboot.
@@ -169,6 +251,16 @@ void handleWifiCommand(const String parts[], int partCount) {
     // If the user typed "wifi scan", run your existing scan function.
     if (parts[1] == "scan") {
         scanWifiNetworks();
+        return;
+    }
+
+    if (parts[1] == "disconnect") {
+        disconnectWifiNetwork();
+        return;
+    }
+
+    if (parts[1] == "forget") {
+        forgetWifiNvs();
         return;
     }
 
@@ -221,7 +313,11 @@ void wifiHelp(){
     addWrappedHistoryLine("wifi");
     addWrappedHistoryLine("wifi scan");
     addWrappedHistoryLine("wifi connect <ssid> <password>");
+    addWrappedHistoryLine("wifi connect  (uses saved)");
+    addWrappedHistoryLine("wifi disconnect");
     addWrappedHistoryLine("wifi save <ssid> <password>");
+    addWrappedHistoryLine("wifi forget  (clears radio NVS)");
+    addWrappedHistoryLine("Never connects on its own -- ask it to.");
     return;
 }
 void wifiStatus(){
