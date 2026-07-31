@@ -14,6 +14,7 @@
   auto cfg = M5.config();
   //Start cardputer hardware. True == kb on
   M5Cardputer.begin(cfg, true);
+  ledBegin();
   recordHeapCheckpoint("after M5 begin");
 
   reserveHotStrings();
@@ -46,6 +47,8 @@
     delay(1000);
   //mount internal flash (LittleFS) and the SD card
   initStorage();
+  ensureDefaultAliases();
+  seedBundledApps();
   recordHeapCheckpoint("after storage");
 
   //   No Wi-Fi join here, deliberately. The radio stays off until "wifi connect" asks
@@ -64,5 +67,6 @@ void loop() {
   keyboardLogic();                  //handle keyboard logic
   ftpService();                     //one non-blocking FTP step while active (FtpServer.ino)
   maintainInternetConnection();     //bounded reconnect tick if the AP went away (wifi.ino)
+  ledService();                     //settle storage/network/app LED effects (Led.ino)
 
 }

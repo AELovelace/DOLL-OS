@@ -25,11 +25,12 @@ untested on a real device.
 | 4 · FTP server | 1 481 875 | +19 936 | 112 644 | +3 224 |
 | 5 · `edit` | 1 493 179 | +11 304 | 113 108 | +464 |
 | resync · `.dapp` strings, `RAND`, `IFEQ` | 1 498 795 | +5 616 | 113 108 | 0 |
+| resync 2 · AppRunner 1.3, Dapper, aliases, bundles | 1 700 651 | +201 856 | 110 524 | -2 584 |
 
-Totals: **+61 424 bytes flash** (1.50 MB of the 6.375 MB slot, 22%) and
-**+6 928 bytes static RAM**, leaving 214 572 bytes free. The editor's 18 KB
-buffer is allocated on entry and freed on exit, so it doesn't appear above; so
-are the `.dapp` string variables (8 × 128 B worst case, on `appExecute`'s frame).
+Totals: **+263 280 bytes flash** (1.70 MB of the 6.375 MB slot) and
+**+4 344 bytes static RAM**, leaving 217 156 bytes free. The editor and the
+AppRunner program/array/canvas blocks are allocated only while those features
+run, so their dynamic cost does not appear in the static-RAM column.
 
 Deviations from the plan as written, all recorded in place below: the inline
 command chord is **Fn+K** not Ctrl+K; the editor's "go to line" is **^L** not
@@ -40,12 +41,30 @@ had to be written after all, because Phase 4 cannot work without it.
 across, so the `.dapp` runtime had drifted behind its parent. Brought level:
 string variables (`SETSTR` / `APPEND` / `INPUT`, backed by a new `DappStringVar`
 in `global.h`), `RAND`, and the string comparisons `IFEQ` / `IFNE`. Caps are
-reduced the way Phase 5 reduced the editor's — 8 string variables of 128
-characters against DS's 8 × 512 — and the step budget takes DS's 4000 in place of
-1200. What is *not* from DS is **Fn+Q**: DS can always drop the telnet session to
+reduced the way Phase 5 reduced the editor's — at that point, 8 string variables
+of 128 characters and a 4000-step budget. What is *not* from DS is **Fn+Q**: DS
+can always drop the telnet session to
 escape a running app, and this can't, so `appDelay()` and the new `INPUT` prompt
 both sample the same local abort chord `ssh` and `telnet` already use. That is
 what makes the higher step budget safe to take.
+
+**Resync 2, 2026-07-31.** Brought the generic DS feature wave back across:
+AppRunner 1.3 arrays, `GOSUB`, expressions, files, non-blocking keys, full-panel
+canvas, and RGB `LED`; the Dapper HTTPS package client including selectable
+internal/SD installs; persistent aliases; firmware-seeded fallback apps; all
+current package sources; and the repository validator/catalog tooling. The
+Cardputer runtime keeps no-PSRAM caps (1,200 lines, 192 labels, 4,096 array
+cells, 40x22 canvas, 128-character strings), but now exposes the same 1.3 opcode
+surface. Dense 40x22 canvases use M5GFX's TomThumb font, and WAIT captures one
+pending physical key so its repeated `M5Cardputer.update()` calls cannot erase a
+keypress before the following `KEY` opcode. Fn+Q remains the local hard abort;
+Ctrl+X is accepted too.
+
+The host repository tests and Arduino compile pass. The generated binary uses
+1,700,651 bytes of flash and 110,524 bytes of static RAM, leaving 217,156 bytes
+for heap/stack. This still has not been flashed or exercised on Cardputer
+hardware; canvas legibility, runtime allocation headroom, RGB order, and live
+Dapper HTTPS/install behavior remain hardware/network validation boundaries.
 
 ## The hardware delta that drives everything
 

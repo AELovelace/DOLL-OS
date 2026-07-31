@@ -1,32 +1,34 @@
 # DOLL-OS .dapp Apps
 
-`.dapp` files are text executables for the DOLL-OS shell. Put them on the SD card
-under:
+`.dapp` files are text executables for the DOLL-OS shell. DOLL-OS looks for them in both
+places:
 
 ```text
-/apps
+/sd/apps   on the SD card (upload with FTP into /apps)
+/apps      on internal flash (LittleFS on the SPIFFS-labeled partition)
 ```
 
-From DOLL-OS, the same folder appears as:
+Normal sketch upload and flash upload are separate on this board:
 
 ```text
-/sd/apps
+Upload          flashes firmware only
+LittleFS/SPIFFS uploads the filesystem image
 ```
 
-They also work from internal flash at `/apps`, which survives having no SD card
-in the slot. Both directories are created for you the first time you run `apps`.
+So `data/apps/<name>.dapp` only lands on the device when you run a dedicated
+filesystem upload. Built-in firmware-seeded apps are written to `/system/apps`
+on boot; `/sd/apps` and `/apps` override a built-in app with the same name.
+This firmware bundle also seeds a plain text copy of this guide to
+`/docs/dapp.txt` on LittleFS.
 
 Use:
 
 ```text
 apps
 run hello
+run /apps/hello.dapp
 run /sd/apps/hello.dapp
 ```
-
-`run <name>` searches `/sd/apps` then `/apps` then treats the name as a path, and
-appends `.dapp` if you leave it off — so `run hello` finds
-`/sd/apps/hello.dapp`.
 
 ## Example
 
@@ -45,29 +47,61 @@ PRINT "tiny executable acquired"
 EXIT
 ```
 
+## Editing
+
+`edit /sd/apps/hello.dapp` syntax highlights the file on the Cardputer panel.
+Comments are grey, commands cyan, labels pink, quoted
+strings green, `$variables` yellow, and numbers orange. Highlighting keys off the
+`.dapp` extension, so saving under a new name with `^O` switches it on or off.
+An opcode that stays white is one `run` will reject as unknown.
+
 ## Commands
 
 ```text
 PRINT <text>        print text, with $variables expanded
 ECHO <text>         alias for PRINT
 COLOR <name>        white, red, green, yellow, blue, magenta, cyan, pink
-CLEAR               clear terminal history
+CLEAR               clear the terminal, or the canvas if one is up
 CLS                 alias for CLEAR
-WAIT <ms>           pause while keeping the status bar and display alive
+WAIT <ms>           pause while keeping display/Wi-Fi/FTP/LED serviced
 SLEEP <ms>          alias for WAIT
 SET <name> <value>  set a numeric variable
 ADD <name> <value>  add to a numeric variable
+SUB <name> <value>  subtract from a numeric variable
+MUL <name> <value>  multiply a numeric variable
+DIV <name> <value>  divide a numeric variable (integer result)
+MOD <name> <value>  remainder of a numeric variable
+EXPR <name> <expr>  evaluate a full arithmetic expression
 RAND <n> <max>      set numeric variable n to 0..max-1
 RAND <n> <min> <max> set numeric variable n to min..max
+DIM <name> <size>   create a numeric array of `size` cells, all zero
 SETSTR <name> <txt> set a string variable
 APPEND <name> <txt> append to a string variable
-INPUT <name> [p]    read a line into a string variable
+CHR <name> <code>   set a string variable to one character by code
+SUBSTR <n> <txt> <start> <count>   slice a string into a string variable
+LEN <name> <text>   character count into a numeric variable
+CHARAT <n> <txt> <i> character code at index i, or 0 past the end
+INPUT <name> [p]    read a line into a string variable (blocks until Enter)
+KEY <name>          read one keypress into a numeric variable, 0 if none
+LED <r> <g> <b>     set the rear RGB LED (0..255 per channel)
+FOPEN <path> <mode> open a file: read, write (truncate), or append
+FCLOSE              close it (automatic when the app ends)
+FREAD <name>        read one line into a string variable; $feof goes 1 at end
+FWRITE <text>       write a line, with $variables expanded
+FEXISTS <n> <path>  1 into numeric variable n if the path exists
+FDELETE <path>      delete a file; $fok reports success
+CANVAS <cols> <rows> switch the display to a character grid
+ENDCANVAS           leave canvas mode, restoring the terminal
+PUT <col> <row> <text>  draw text into the canvas in the current COLOR
+FLIP                push the canvas to the Cardputer panel
 LABEL <name>        define a jump target
 :<name>             shorthand label
 GOTO <name>         jump to a label
-IF <l> <op> <r> GOTO <name>
-IFEQ <l> <r> GOTO <name>
-IFNE <l> <r> GOTO <name>
+GOSUB <name>        call a label, returning to the next line
+RETURN              return from the most recent GOSUB
+IF <l> <op> <r> GOTO|GOSUB <name>
+IFEQ <l> <r> GOTO|GOSUB <name>
+IFNE <l> <r> GOTO|GOSUB <name>
 EXIT                leave the app
 END                 alias for EXIT
 ```
@@ -76,9 +110,169 @@ END                 alias for EXIT
 `RAND roll 6` returns `0..5`; `RAND roll 1 6` returns `1..6`.
 `IFEQ` and `IFNE` compare strings. Quote string literals that contain spaces.
 
-`INPUT` takes over the command bar until you press enter — the answer goes into a
-string variable, and the shell's own half-typed line is left untouched
-underneath. `Fn+Q` at an `INPUT` prompt aborts the app.
+## Arrays
+
+`DIM` makes a numeric array. Cells are read as `$name[index]` anywhere a value is
+accepted, and written by using `name[index]` where a variable name goes:
+
+```text
+DIM well 200
+SET well[0] 3
+EXPR i $y * 10 + $x
+SET well[$i] $well[0]
+IF $well[$i] <> 0 GOTO occupied
+```
+
+The index is itself a value, so `$board[$row]` and `$board[$a[1]]` both work. An
+index outside the array stops the app with the offending line number rather than
+quietly reading zero. On Cardputer all arrays share a pool of 4096 cells.
+
+## Arithmetic
+
+`SET`/`ADD`/`SUB`/`MUL`/`DIV`/`MOD` each take one value, which is enough for
+counters and awkward for anything else. `EXPR` takes a whole expression instead
+and hands it to the same evaluator the `calc` command uses:
+
+```text
+EXPR index $row * 10 + $col
+EXPR wrapped ($angle + 360) % 360
+EXPR level floor($lines / 10) + 1
+```
+
+`+ - * / ^ %` work, along with `abs`, `floor`, `ceil`, `sqrt`, `pow`, and the
+trig functions â€” the `calc help` list. Spaces are fine. Every `$name` is replaced
+by its **numeric** value before evaluation, and the result is rounded to a whole
+number on the way into the variable. Note that `/` divides as a real number:
+`EXPR a $b / 10` on `b = 5` stores `1`, not `0`. Wrap it in `floor()` when you
+want truncation.
+
+## Subroutines
+
+`GOSUB` jumps like `GOTO` but remembers where it came from, and `RETURN` goes
+back to the line after the call. Nesting is allowed up to 64 deep.
+
+```text
+GOSUB redraw
+GOTO done
+
+:redraw
+PUT 0 0 "score $score"
+FLIP
+RETURN
+```
+
+There is one rule worth stating plainly: **a routine must leave through
+`RETURN`**, not by `GOTO`-ing somewhere else. Jumping out strands the return
+address on the stack, and enough of those in a loop will hit the depth limit. If
+a routine needs to end the round, set a variable and let the caller act on it.
+
+## Keys and games
+
+`INPUT` blocks until Enter, which makes it useless for anything that has to keep
+moving while nobody is typing. `KEY` reads at most one keypress and returns
+immediately with `0` when nothing is waiting from the built-in keyboard:
+
+```text
+:loop
+KEY k
+IF $k = $kleft GOSUB move_left
+IF $k = $kesc GOTO quit
+WAIT 16
+GOTO loop
+```
+
+Printable keys come back as their ASCII code (`65` for `A`, `32` for space), and
+these built-ins name the rest: `$kup`, `$kdown`, `$kleft`, `$kright`, `$kenter`,
+`$kesc`, `$kback`, `$ktab`, `$kspace`. They are numbers, not text â€” compare
+against them, don't `PRINT` them. Use Fn+`;`/`.`/`,`/`/` for up/down/left/right;
+Ctrl+C and Ctrl+T read as `$kesc`. Ctrl+X or Fn+Q aborts the running app from
+`KEY`, `WAIT`, or a blocked `INPUT`.
+
+`LED` sets the rear RGB LED and requires AppRunner `>=1.3.0`. Channel values are
+clamped into `0..255`, so negative values become `0` and values above `255`
+become `255`. Check `$ledok` first when writing portable apps that may run on
+builds where rear LED control is disabled.
+
+`CANVAS` replaces the scrolling terminal with a grid you address by cell. `PUT`
+writes into the grid without drawing anything, and `FLIP` shows the result â€” so a
+frame is assembled off-screen and appears at once. On the panel the grid is
+scaled to the full 240x135 panel; dense grids automatically use the tiny font.
+`CLS` blanks the grid while a canvas is up.
+`ENDCANVAS` puts the terminal back, and so does leaving the app.
+
+```text
+CANVAS 20 10
+COLOR cyan
+PUT 6 4 "hello"
+FLIP
+WAIT 1000
+ENDCANVAS
+```
+
+A canvas is at most 40 by 22 cells. `run tetris` is the worked example: a well
+in a 200-cell array, pieces rotated with `EXPR`, gravity paced off `$millis`, and
+every frame drawn cell by cell.
+
+## Files
+
+One file can be open at a time â€” `FOPEN` closes any previous one, and the app
+ending closes the last. Paths work exactly like shell paths: `/sd/...` is the
+card, everything else is flash, relative paths resolve against the shell's
+`cwd`, and `$variables` expand inside them.
+
+```text
+FOPEN "/apps/scores.txt" append
+FWRITE "$name $score"
+FCLOSE
+```
+
+Reading is line by line; `$feof` becomes 1 when a read finds nothing left (an
+empty line in the middle of a file leaves it 0, so the two are distinguishable):
+
+```text
+FOPEN "/apps/scores.txt" read
+:rl
+FREAD line
+IF $feof = 1 GOTO done
+PRINT $line
+GOTO rl
+:done
+FCLOSE
+```
+
+A file that can't be opened is not an error â€” `$fok` is 0 and the script
+decides, because a missing save file is a normal situation. Misusing the handle
+is an error: `FREAD` with nothing open (or a file opened for write), or `FWRITE`
+on a file opened for read, stops the app like any other bug. One more thing to
+remember: numbers written with `FWRITE` come back as *text* â€” parse digits with
+`CHARAT` (the book's `str2num` routine) before doing math on them. `run tetris`
+does exactly this for its persistent high score in `/apps/tetris.hs`.
+
+## Limits
+
+A script is read into internal RAM in full before its first line runs. Cardputer
+has no PSRAM, so these caps are deliberately below the DS build while still fitting
+every checked-in app:
+
+```text
+1200       lines per app
+192        labels
+64         numeric variables
+32         string variables
+16         arrays, sharing a pool of 4096 cells
+64         nested GOSUB calls
+1          open file at a time
+40 x 22    largest canvas
+128        characters per string variable
+250000     executed steps between waits before the loop guard trips
+```
+
+Hitting one is reported on the terminal rather than failing silently. The step
+guard counts instructions since the last `WAIT` or `INPUT`, on the grounds that a
+runaway loop is precisely one that never yields â€” so a game pacing itself with
+`WAIT 16` can run all day, while a bare `GOTO` loop still trips. A loop that
+`WAIT`s forever on purpose (or by accident) is stopped from the keyboard instead:
+Ctrl+X or Fn+Q aborts any running app.
 
 Built-ins usable as `$name` or numeric values:
 
@@ -90,7 +284,12 @@ $ip
 $millis
 $seconds
 $wifi
+$ledok
 ```
+
+Numeric only (see Keys and games): `$kup`, `$kdown`, `$kleft`, `$kright`,
+`$kenter`, `$kesc`, `$kback`, `$ktab`, `$kspace`; plus the file-op status pair
+`$fok` (last FOPEN/FDELETE succeeded) and `$feof` (last FREAD hit end of file).
 
 ## Interactive Example
 
@@ -109,32 +308,3 @@ GOTO again
 PRINT "bye"
 EXIT
 ```
-
-## Limits
-
-| | |
-|---|---|
-| lines per app | 160 |
-| labels | 32 |
-| numeric variables | 16 |
-| string variables | 8, 128 characters each |
-| steps before abort | 4000 |
-
-## Stopping an app
-
-A running app owns `loop()`. It is stopped two ways:
-
-- **`Fn+Q`**, sampled wherever an app pauses — during `WAIT`/`SLEEP` and at an
-  `INPUT` prompt. The app stops with `run: cancelled`.
-- **the step budget**, for an app with neither. A loop of nothing but `GOTO`
-  never yields to the keyboard, so it stops itself after 4000 steps rather than
-  hanging the shell.
-
-Nothing else reads the keyboard while an app runs — deliberately, so a keystroke
-can't land in the shell's command line mid-app and get submitted the moment the
-app exits.
-
-`SET`, `ADD`, `IF` and `RAND` are integers only; `SETSTR`, `APPEND`, `INPUT`,
-`IFEQ` and `IFNE` are the string half. `$cwd` and `$ip` are strings: they work in
-`PRINT` and `IFEQ`, but evaluate to 0 in `IF`/`SET`/`ADD`. String variables are
-truncated at 128 characters (DS allows 512 — it has PSRAM and this doesn't).

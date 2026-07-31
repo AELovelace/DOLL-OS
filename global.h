@@ -3,6 +3,31 @@
 
 #pragma once
 
+#include <ArduinoJson.h>
+
+// M5Cardputer contains the StampS3's single addressable RGB LED. All LED helpers
+// remain safe no-ops if a future compatible board reports no LED instances.
+struct LedRgb {
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+};
+
+bool rearLedAvailable();
+void rearLedSetRgb(uint8_t red, uint8_t green, uint8_t blue);
+void rearLedSetRgbLong(long red, long green, long blue);
+void rearLedOff();
+void ledBegin();
+void ledService();
+void ledPulseStorageRead(bool isSd);
+void ledPulseStorageWrite(bool isSd);
+void ledPulseNetwork();
+void ledPulseInput();
+void ledPulseError();
+void ledSetAppOverrideRgb(uint8_t red, uint8_t green, uint8_t blue);
+void ledSetAppOverrideRgbLong(long red, long green, long blue);
+void ledClearAppOverride();
+
 //battery logic
 int batteryPercent = 0;         //battery in percent
 int batteryMillivolts = 0;      //battery in millivolts
@@ -36,6 +61,35 @@ struct RoutedPath {
     fs::FS* fs;
     String realPath;
     bool isSd;
+};
+
+//File-backed shell aliases. Kept here because Arduino-generated prototypes for
+//Alias.ino mention this type before that tab is concatenated.
+struct AliasEntry {
+    String name;
+    String expansion;
+};
+
+//Dapper package/catalog records, also needed before generated prototypes.
+struct DapperRecord {
+    int packageFormat = 0;
+    String id;
+    String name;
+    String summary;
+    String version;
+    String runtimeMin;
+    String runtimeMaxExclusive;
+    String sha256;
+    String url;
+    size_t size = 0;
+    bool compatible = false;
+    String incompatibility;
+};
+
+struct DapperInstalled {
+    DapperRecord record;
+    String repository;
+    String installedPath;
 };
 
 //   Output color codes (Output.ino)
@@ -97,6 +151,68 @@ struct DappStringVar {
     String value;
     bool used;
 };
+
+//DIM arrays share one fixed pool owned by DappProgram. On Cardputer all blocks
+//come from internal RAM, so AppRunner keeps smaller caps than the PSRAM DS build.
+struct DappArray {
+    String name;
+    long* values;
+    int size;
+    bool used;
+};
+
+struct DappProgram {
+    DappLine* lines = nullptr;
+    DappLabel* labels = nullptr;
+    DappVar* vars = nullptr;
+    DappStringVar* stringVars = nullptr;
+    DappArray* arrays = nullptr;
+    long* arrayPool = nullptr;
+    int* callStack = nullptr;
+    int lineCount = 0;
+    int labelCount = 0;
+    int arrayPoolUsed = 0;
+    int callDepth = 0;
+    String fault = "";
+
+    bool alloc();
+    ~DappProgram();
+
+    DappProgram() {}
+    DappProgram(const DappProgram&) = delete;
+    DappProgram& operator=(const DappProgram&) = delete;
+};
+
+enum DappKeyPhase { DKEY_NORMAL, DKEY_ESC, DKEY_CSI };
+struct DappKeyState {
+    DappKeyPhase phase = DKEY_NORMAL;
+    String params = "";
+    unsigned long escAtMs = 0;
+};
+
+struct DappCanvasCell {
+    char ch;
+    uint8_t color;
+};
+DappCanvasCell* dappCanvasCells = nullptr;
+int dappCanvasCols = 0;
+int dappCanvasRows = 0;
+bool dappCanvasActive = false;
+
+#define DOLL_BOARD_ID "m5cardputer"
+#define DAPP_RUNTIME_VERSION "1.3.0"
+#define DAPP_PACKAGE_FORMAT 1
+
+int splitCommand(const String& input, String parts[], int maxParts);
+bool keyboardEventIsDebounced(const Keyboard_Class::KeysState& keys);
+void ensureDefaultAliases();
+bool expandCommandAlias(String& command, String& aliasName, String& aliasExpansion);
+void handleAliasCommand(const String parts[], int partCount);
+void handleAppsCommand(const String parts[], int partCount);
+void handleDapperCommand(const String parts[], int partCount);
+void handleRunCommand(const String parts[], int partCount);
+void handleUnaliasCommand(const String parts[], int partCount);
+void seedBundledApps();
 
 //status bar
 const int STATUS_BAR_HEIGHT = 14;   //pixel height of the top status bar

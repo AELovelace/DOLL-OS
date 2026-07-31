@@ -105,10 +105,10 @@ struct CommandEntry {
 };
 
 void helpCommandHandler(const String parts[], int partCount) {
-    outLine("Commands: apps, battery, calc, cat, cd, clear, cp, del,");
-    outLine("          dice, edit, free, ftp, help, ip, ls, mkdir,");
-    outLine("          motoko, mv, ping, pwd, reboot, rm, run, ssh,");
-    outLine("          status, telnet, uptime, usb, wifi");
+    outLine("Commands: alias, apps, battery, calc, cat, cd, clear, cp,");
+    outLine("          dapper, del, dice, edit, free, ftp, help, ip,");
+    outLine("          ls, mkdir, motoko, mv, ping, pwd, reboot, rm,");
+    outLine("          run, ssh, status, telnet, unalias, uptime, usb, wifi");
 }
 
 //reboots the board. Nothing is flushed first because nothing here is buffered --
@@ -153,12 +153,14 @@ void handleStatusCommand(const String parts[], int partCount) {
 
 //sorted alphabetically for readability; lookup is a linear scan since the table is tiny
 static const CommandEntry commandTable[] = {
+    { "alias",  handleAliasCommand },
     { "apps",   handleAppsCommand },
     { "battery", handleBatteryCommand },
     { "calc",   handleCalcCommand },
     { "cat",    handleCatCommand },
     { "cd",     handleCdCommand },
     { "cp",     handleCpCommand },
+    { "dapper", handleDapperCommand },
     { "del",    handleDelCommand },
     { "dice",   handleDiceCommand },
     { "edit",   handleEditCommand },
@@ -178,6 +180,7 @@ static const CommandEntry commandTable[] = {
     { "ssh",    handleSshCommand },
     { "status", handleStatusCommand },
     { "telnet", handleTelnetCommand },
+    { "unalias", handleUnaliasCommand },
     { "uptime", handleUptimeCommand },
     { "usb",    handleUsbCommand },
     { "wifi",   handleWifiCommand },
@@ -199,8 +202,13 @@ void commandProcessor(String& command) {
     trimmedEntered.trim();
     addCommandHistory(trimmedEntered);   //remember this command for fn+;/fn+. recall
 
+    String dispatchCommand = trimmedEntered;
+    String aliasName;
+    String aliasExpansion;
+    expandCommandAlias(dispatchCommand, aliasName, aliasExpansion);
+
     String parts[8];
-    int partCount = splitCommand(entered, parts, 8);
+    int partCount = splitCommand(dispatchCommand, parts, 8);
     //if no parts, stop here.
     if (partCount == 0) {
         return;
@@ -219,5 +227,9 @@ void commandProcessor(String& command) {
             return;
         }
     }
-    outLine("Unknown command: " + entered, C_RED);   //fallback for anything not recognized above
+    String unknown = dispatchCommand;
+    if (aliasName.length() > 0) {
+        unknown += " (from alias " + aliasName + ")";
+    }
+    outLine("Unknown command: " + unknown, C_RED);
 }

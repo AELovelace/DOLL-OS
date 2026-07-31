@@ -35,6 +35,7 @@ profiles:
       - dir: ../libraries/M5Cardputer
       - dir: ../libraries/M5Unified
       - dir: ../libraries/M5GFX
+      - dir: ../libraries/ArduinoJson
       - dir: ../libraries/PubSubClient
       - dir: ../libraries/LibSSH-ESP32
       - dir: ../libraries/ESP32Ping

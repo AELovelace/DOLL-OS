@@ -1,33 +1,144 @@
 //   AppRunner.ino
-//   tiny executable script runtime, ported from DS. Apps are plain text .dapp files
-//   stored in /apps on LittleFS or /sd/apps on the SD card, then launched from the
-//   shell with "run". The format is intentionally small: a few display/shell commands,
-//   numeric variables, labels, and jumps. See docs/DAPP.md.
-//
-//   Ported near-verbatim -- the language is display-agnostic, so the changes are the SD
-//   library (SD/SPI here, SD_MMC on DS), appDelay()'s idea of what "keep the system alive
-//   while waiting" means, and appReadInput(), which reads the built-in keyboard instead of
-//   alternating DS's two byte sources. See docs/PORT-FROM-DS.md, Phase 3.
-//
-//   Kept in sync with DS as of 2026-07-30: string variables (SETSTR/APPEND/INPUT), RAND,
-//   and IFEQ/IFNE all landed in DS after this file was first ported across. Only the caps
-//   differ, and Fn+Q is local -- see DAPP_MAX_STRING_LEN and appCancelRequested().
+//   tiny executable script runtime for DOLL-OS. Apps are plain text .dapp files stored
+//   in /apps on LittleFS or /sd/apps on the FTP-served SD card, then launched from
+//   the shell with "run". The format is intentionally small: a few display/shell
+//   commands, numeric variables, labels, and jumps.
 #include <LittleFS.h>
 #include <FS.h>
 #include <SD.h>
 #include <esp_heap_caps.h>
 #include <esp_system.h>
+#include <new>
+//EXPR hands whole arithmetic expressions to the same evaluator the "calc" shell command
+//uses (Calc.ino). The script language deliberately has no expression grammar of its own --
+//there is no reason to grow a second, worse one when this is already linked in.
+#include "tinyexpr.h"
 
-const int DAPP_MAX_LINES = 160;
-const int DAPP_MAX_LABELS = 32;
-const int DAPP_MAX_VARS = 16;
-const int DAPP_MAX_STRING_VARS = 8;
-//   DS caps string variables at 512 characters. Its slab lives in PSRAM; these are plain
-//   heap Strings on a machine with ~215KB free and a fragmentation problem, so 8 of them
-//   at 512 is 4KB of churn for text this terminal can't show anyway -- the panel is 38
-//   characters wide, so 128 is already three and a half wrapped rows.
+//   Where a running app's memory lives
+//   The whole script is read into RAM before the first line executes, so these caps are
+//   really a memory budget. They used to be far smaller (160 lines / 32 labels / 16 vars)
+//   because the arrays were plain stack locals in handleRunCommand and appExecute -- a
+//   String is only a 12-byte header, but 160 of them plus labels already spent ~2.5KB of
+//   the loopTask's 8KB stack, and the interpreter still has to run string expansion and
+//   display work underneath. Raising the constants alone would have overflowed the stack
+//   rather than printing a limit error.
+//   They now come from internal heap instead (DappProgram::alloc below). The caps fit all
+//   checked-in apps, including sheet.dapp, while leaving headroom for the display sprites,
+//   Wi-Fi, FTP, and SSH on this no-PSRAM board.
+const int DAPP_MAX_LINES = 1200;
+const int DAPP_MAX_LABELS = 192;
+const int DAPP_MAX_VARS = 64;
+const int DAPP_MAX_STRING_VARS = 32;
 const int DAPP_MAX_STRING_LEN = 128;
-const int DAPP_MAX_STEPS = 4000;
+
+//   DIM'd numeric arrays. Every array carves cells out of one shared pool rather than
+//   allocating its own block, so the memory cost is fixed at load time whatever the script
+//   DIMs -- 4096 longs is 16KB of internal RAM, and even sheet.dapp stays below it.
+const int DAPP_MAX_ARRAYS = 16;
+const int DAPP_ARRAY_POOL_CELLS = 4096;
+
+//GOSUB nesting. Deep enough for the routine-calls-routine shape real scripts have, shallow
+//enough that a runaway recursion reports a clean error instead of eating heap.
+const int DAPP_MAX_CALL_DEPTH = 64;
+
+//CANVAS bounds. The panel can't usefully render finer than this, and the cap keeps the
+//cell buffer (2 bytes/cell) under 15KB at its largest.
+const int DAPP_CANVAS_MAX_COLS = 40;
+const int DAPP_CANVAS_MAX_ROWS = 22;
+
+//runaway-loop backstop. Generous now that it isn't standing in for a memory limit, but a
+//tight GOTO loop at this cap runs for minutes, and the interpreter only services the
+//display and services inside WAIT and INPUT -- so appExecute yields every DAPP_STEPS_PER_YIELD
+//steps to keep the scheduler and watchdog fed through a long compute loop.
+//
+//The counter resets whenever the script blocks on purpose (a WAIT with a real duration, or
+//an INPUT), because "runaway" means *not yielding*: a game loop that paces itself with
+//WAIT 30 would otherwise hit the cap after a few minutes of legitimate play, while a tight
+//GOTO loop -- the thing this actually guards against -- never resets and still trips.
+const int DAPP_MAX_STEPS = 250000;
+const int DAPP_STEPS_PER_YIELD = 256;
+
+//Cardputer has no PSRAM, so every program block is allocated from 8-bit internal heap.
+//The reduced caps above keep the fixed allocation near 40 KB before script text Strings.
+static void* appCalloc(size_t count, size_t size, const char* tag) {
+    (void)tag;
+    return heap_caps_calloc(count, size, MALLOC_CAP_8BIT);
+}
+
+//placement-new over one heap block per array: heap_caps_calloc gives raw bytes, and
+//these elements hold Strings that need their constructors run. Returns false with
+//everything released if any block can't be had.
+bool DappProgram::alloc() {
+    void* lineMem = appCalloc(DAPP_MAX_LINES, sizeof(DappLine), "dappLines");
+    void* labelMem = appCalloc(DAPP_MAX_LABELS, sizeof(DappLabel), "dappLabels");
+    void* varMem = appCalloc(DAPP_MAX_VARS, sizeof(DappVar), "dappVars");
+    void* stringVarMem = appCalloc(DAPP_MAX_STRING_VARS, sizeof(DappStringVar), "dappStringVars");
+    void* arrayMem = appCalloc(DAPP_MAX_ARRAYS, sizeof(DappArray), "dappArrays");
+    //the pool and the call stack are plain longs/ints -- calloc's zeroing is their whole
+    //initialization, so unlike the four above they need no placement-new pass
+    void* poolMem = appCalloc(DAPP_ARRAY_POOL_CELLS, sizeof(long), "dappArrayPool");
+    void* callMem = appCalloc(DAPP_MAX_CALL_DEPTH, sizeof(int), "dappCallStack");
+
+    if (!lineMem || !labelMem || !varMem || !stringVarMem || !arrayMem || !poolMem || !callMem) {
+        heap_caps_free(lineMem);
+        heap_caps_free(labelMem);
+        heap_caps_free(varMem);
+        heap_caps_free(stringVarMem);
+        heap_caps_free(arrayMem);
+        heap_caps_free(poolMem);
+        heap_caps_free(callMem);
+        return false;
+    }
+
+    lines = (DappLine*)lineMem;
+    labels = (DappLabel*)labelMem;
+    vars = (DappVar*)varMem;
+    stringVars = (DappStringVar*)stringVarMem;
+    arrays = (DappArray*)arrayMem;
+    arrayPool = (long*)poolMem;
+    callStack = (int*)callMem;
+
+    for (int i = 0; i < DAPP_MAX_LINES; i++) new (&lines[i]) DappLine();
+    for (int i = 0; i < DAPP_MAX_LABELS; i++) new (&labels[i]) DappLabel();
+    for (int i = 0; i < DAPP_MAX_VARS; i++) new (&vars[i]) DappVar();
+    for (int i = 0; i < DAPP_MAX_STRING_VARS; i++) new (&stringVars[i]) DappStringVar();
+    for (int i = 0; i < DAPP_MAX_ARRAYS; i++) new (&arrays[i]) DappArray();
+
+    //the () above is value-initialization, so the plain members (`used`, `lineIndex`,
+    //`value`) are zeroed and the Strings are properly constructed -- appEnsureVar can
+    //trust `used == false` on a fresh program.
+    return true;
+}
+
+DappProgram::~DappProgram() {
+    if (lines) {
+        for (int i = 0; i < DAPP_MAX_LINES; i++) lines[i].~DappLine();
+        heap_caps_free(lines);
+    }
+    if (labels) {
+        for (int i = 0; i < DAPP_MAX_LABELS; i++) labels[i].~DappLabel();
+        heap_caps_free(labels);
+    }
+    if (vars) {
+        for (int i = 0; i < DAPP_MAX_VARS; i++) vars[i].~DappVar();
+        heap_caps_free(vars);
+    }
+    if (stringVars) {
+        for (int i = 0; i < DAPP_MAX_STRING_VARS; i++) stringVars[i].~DappStringVar();
+        heap_caps_free(stringVars);
+    }
+    if (arrays) {
+        for (int i = 0; i < DAPP_MAX_ARRAYS; i++) arrays[i].~DappArray();
+        heap_caps_free(arrays);
+    }
+    //no per-array free: every DappArray::values points into arrayPool, which goes as one block
+    if (arrayPool) {
+        heap_caps_free(arrayPool);
+    }
+    if (callStack) {
+        heap_caps_free(callStack);
+    }
+}
 
 static bool endsWithIgnoreCase(String value, const String& suffix) {
     value.toLowerCase();
@@ -78,6 +189,7 @@ static bool appOpenResolvedFile(const String& resolved, File& outFile) {
         return false;
     }
 
+    ledPulseStorageRead(r.isSd);
     File f = r.fs->open(r.realPath, "r");
     if (!f || f.isDirectory()) {
         if (f) {
@@ -105,8 +217,6 @@ static bool appOpenCandidate(const String& candidate, File& outFile, String& res
     return false;
 }
 
-//"run hello" searches the two app directories before treating the name as a path, so an
-//app can be launched from anywhere without typing where it lives
 static bool appOpenByName(const String& target, File& outFile, String& resolvedOut) {
     if (target.indexOf('/') >= 0) {
         return appOpenCandidate(target, outFile, resolvedOut);
@@ -120,10 +230,11 @@ static bool appOpenByName(const String& target, File& outFile, String& resolvedO
     const String candidates[] = {
         "/sd/apps/" + name,
         "/apps/" + name,
+        "/system/apps/" + name,
         target,
     };
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         if (appOpenCandidate(candidates[i], outFile, resolvedOut)) {
             return true;
         }
@@ -132,22 +243,26 @@ static bool appOpenByName(const String& target, File& outFile, String& resolvedO
 }
 
 static void ensureAppDirectories() {
+    ledPulseStorageRead(false);
     File flashApps = LittleFS.open("/apps");
     if (!flashApps || !flashApps.isDirectory()) {
         if (flashApps) {
             flashApps.close();
         }
+        ledPulseStorageWrite(false);
         LittleFS.mkdir("/apps");
     } else {
         flashApps.close();
     }
 
     if (sdCardMounted) {
+        ledPulseStorageRead(true);
         File sdApps = SD.open("/apps");
         if (!sdApps || !sdApps.isDirectory()) {
             if (sdApps) {
                 sdApps.close();
             }
+            ledPulseStorageWrite(true);
             SD.mkdir("/apps");
         } else {
             sdApps.close();
@@ -156,6 +271,8 @@ static void ensureAppDirectories() {
 }
 
 static void listAppsInDir(fs::FS& fs, const String& realPath, const String& label) {
+    bool isSd = label.startsWith("/sd/");
+    ledPulseStorageRead(isSd);
     File dir = fs.open(realPath);
     if (!dir || !dir.isDirectory()) {
         if (dir) {
@@ -169,6 +286,7 @@ static void listAppsInDir(fs::FS& fs, const String& realPath, const String& labe
     File entry = dir.openNextFile();
     int count = 0;
     while (entry) {
+        ledPulseStorageRead(isSd);
         String name = entry.name();
         if (!entry.isDirectory() && endsWithIgnoreCase(name, ".dapp")) {
             outLine("  " + name + "  " + String(entry.size()) + "b");
@@ -185,13 +303,14 @@ static void listAppsInDir(fs::FS& fs, const String& realPath, const String& labe
 
 void handleAppsCommand(const String parts[], int partCount) {
     ensureAppDirectories();
-    outLine("Apps live in /sd/apps, or /apps on flash.", C_CYAN);
+    outLine("Apps: SD overrides, Dapper/user apps, then firmware fallbacks.", C_CYAN);
     if (sdCardMounted) {
         listAppsInDir(SD, "/apps", "/sd/apps");
     } else {
         outLine("/sd/apps: SD not mounted", C_YELLOW);
     }
     listAppsInDir(LittleFS, "/apps", "/apps");
+    listAppsInDir(LittleFS, "/system/apps", "/system/apps");
 }
 
 static int appFindLabel(const DappLabel labels[], int labelCount, String name) {
@@ -251,7 +370,7 @@ static int appEnsureStringVar(DappStringVar vars[], const String& name) {
             vars[i].used = true;
             vars[i].name = name;
             vars[i].value = "";
-            vars[i].value.reserve(48);   //DS reserves 80; one wrapped terminal row is ~38 chars here
+            vars[i].value.reserve(80);
             return i;
         }
     }
@@ -285,6 +404,129 @@ static bool appIsNameChar(char ch) {
         || ch == '_';
 }
 
+//   Arrays (DIM)
+//
+//   Reads and writes go through appArrayCell, which is the only place a bad index can be
+//   caught -- and it has no way to return an error, since it is called from deep inside
+//   value expansion. It sets program.fault instead; appExecute checks that after every
+//   instruction and stops the app. A silently-zero out-of-range read is exactly the bug
+//   that makes a 200-cell game board impossible to debug, so it is worth the plumbing.
+
+static int appFindArray(DappProgram& program, const String& name) {
+    for (int i = 0; i < DAPP_MAX_ARRAYS; i++) {
+        if (program.arrays[i].used && program.arrays[i].name == name) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static long* appArrayCell(DappProgram& program, const String& name, long index) {
+    int slot = appFindArray(program, name);
+    if (slot < 0) {
+        program.fault = "no array named " + name + " (DIM it first)";
+        return nullptr;
+    }
+    if (index < 0 || index >= program.arrays[slot].size) {
+        program.fault = "index " + String(index) + " outside " + name +
+                        "[0.." + String(program.arrays[slot].size - 1) + "]";
+        return nullptr;
+    }
+    return &program.arrays[slot].values[index];
+}
+
+//carves `size` cells off the shared pool. Re-DIMming a name at its existing size just
+//zeroes it -- that is what a script restarting a game wants, and it costs no new cells.
+static bool appDimArray(DappProgram& program, const String& name, long size) {
+    if (size <= 0) {
+        outLine("run: DIM size must be greater than 0", C_RED);
+        return false;
+    }
+
+    int existing = appFindArray(program, name);
+    if (existing >= 0) {
+        if (program.arrays[existing].size != (int)size) {
+            outLine("run: " + name + " is already DIM'd at " + String(program.arrays[existing].size), C_RED);
+            return false;
+        }
+        for (int i = 0; i < program.arrays[existing].size; i++) {
+            program.arrays[existing].values[i] = 0;
+        }
+        return true;
+    }
+
+    if (program.arrayPoolUsed + size > DAPP_ARRAY_POOL_CELLS) {
+        outLine("run: out of array space (max " + String(DAPP_ARRAY_POOL_CELLS) + " cells total)", C_RED);
+        return false;
+    }
+
+    for (int i = 0; i < DAPP_MAX_ARRAYS; i++) {
+        if (program.arrays[i].used) {
+            continue;
+        }
+        program.arrays[i].used = true;
+        program.arrays[i].name = name;
+        program.arrays[i].values = program.arrayPool + program.arrayPoolUsed;
+        program.arrays[i].size = (int)size;
+        for (int c = 0; c < (int)size; c++) {
+            program.arrays[i].values[c] = 0;
+        }
+        program.arrayPoolUsed += (int)size;
+        return true;
+    }
+
+    outLine("run: too many arrays (max " + String(DAPP_MAX_ARRAYS) + ")", C_RED);
+    return false;
+}
+
+//splits "board[$i+1]" into "board" and "$i+1". Takes the first '[' and the last ']' so a
+//nested subscript (board[$row[$i]]) stays intact for the recursive evaluation above.
+static bool appParseSubscript(const String& token, String& nameOut, String& indexOut) {
+    int open = token.indexOf('[');
+    if (open <= 0 || !token.endsWith("]")) {
+        return false;
+    }
+    nameOut = trimCopy(token.substring(0, open));
+    indexOut = trimCopy(token.substring(open + 1, token.length() - 1));
+    return nameOut.length() > 0 && indexOut.length() > 0;
+}
+
+//index just past the ']' that closes the '[' at openIdx, or -1 if it never closes. Used by
+//the text expanders, which scan a name and then have to know where its subscript ends.
+static int appScanSubscript(const String& text, int openIdx) {
+    int depth = 0;
+    for (int i = openIdx; i < (int)text.length(); i++) {
+        if (text[i] == '[') {
+            depth++;
+        } else if (text[i] == ']') {
+            depth--;
+            if (depth == 0) {
+                return i + 1;
+            }
+        }
+    }
+    return -1;
+}
+
+//   Key codes returned by KEY. Deliberately small and printable-ASCII-compatible: anything
+//   32..126 is the character itself, so a script can compare against "a" via its code or
+//   just use these names for the rest.
+const long DAPP_KEY_NONE  = 0;
+const long DAPP_KEY_UP    = 1;
+const long DAPP_KEY_DOWN  = 2;
+const long DAPP_KEY_LEFT  = 3;
+const long DAPP_KEY_RIGHT = 4;
+const long DAPP_KEY_ENTER = 5;
+const long DAPP_KEY_ESC   = 6;
+const long DAPP_KEY_BACK  = 8;
+const long DAPP_KEY_TAB   = 9;
+const long DAPP_KEY_SPACE = 32;
+
+//file-op status, declared up here because appBuiltinValue below reads them; the handle
+//itself and the routines live in the Files section further down
+static long dappFok = 0;    //result of the last FOPEN/FDELETE, read as $fok
+static long dappFeof = 0;   //set by FREAD at end of file, read as $feof
+
 static long appBuiltinValue(String name) {
     name.trim();
     name.toLowerCase();
@@ -293,37 +535,69 @@ static long appBuiltinValue(String name) {
     if (name == "millis") return millis();
     if (name == "seconds") return millis() / 1000;
     if (name == "wifi") return wifiIsConnected() == 1 ? 1 : 0;
+    if (name == "fok") return dappFok;
+    if (name == "feof") return dappFeof;
+    if (name == "ledok") return rearLedAvailable() ? 1 : 0;
+
+    //KEY's vocabulary, so scripts compare against a name instead of a magic number.
+    //Numeric only -- these are not defined for string expansion (PRINT "$kup" is empty),
+    //because they exist to be compared, not printed.
+    if (name == "kup") return DAPP_KEY_UP;
+    if (name == "kdown") return DAPP_KEY_DOWN;
+    if (name == "kleft") return DAPP_KEY_LEFT;
+    if (name == "kright") return DAPP_KEY_RIGHT;
+    if (name == "kenter") return DAPP_KEY_ENTER;
+    if (name == "kesc") return DAPP_KEY_ESC;
+    if (name == "kback") return DAPP_KEY_BACK;
+    if (name == "ktab") return DAPP_KEY_TAB;
+    if (name == "kspace") return DAPP_KEY_SPACE;
     return 0;
 }
 
-static long appValueOf(String token, DappVar vars[]) {
+static long appValueOf(String token, DappProgram& program) {
     token.trim();
     token = stripMatchingQuotes(token);
     if (token.startsWith("$")) {
         token.remove(0, 1);
     }
+
+    String name;
+    String indexToken;
+    if (appParseSubscript(token, name, indexToken)) {
+        long* cell = appArrayCell(program, name, appValueOf(indexToken, program));
+        return cell ? *cell : 0;
+    }
+
     if (appIsInteger(token)) {
         return token.toInt();
     }
-    int slot = appFindVar(vars, token);
+    int slot = appFindVar(program.vars, token);
     if (slot >= 0) {
-        return vars[slot].value;
+        return program.vars[slot].value;
     }
     return appBuiltinValue(token);
 }
 
-static String appStringValueOf(String token, DappVar vars[], DappStringVar stringVars[]) {
+static String appStringValueOf(String token, DappProgram& program) {
     token.trim();
     if (token.startsWith("$")) {
         token.remove(0, 1);
     }
-    int stringSlot = appFindStringVar(stringVars, token);
-    if (stringSlot >= 0) {
-        return stringVars[stringSlot].value;
+
+    String name;
+    String indexToken;
+    if (appParseSubscript(token, name, indexToken)) {
+        long* cell = appArrayCell(program, name, appValueOf(indexToken, program));
+        return cell ? String(*cell) : "";
     }
-    int slot = appFindVar(vars, token);
+
+    int stringSlot = appFindStringVar(program.stringVars, token);
+    if (stringSlot >= 0) {
+        return program.stringVars[stringSlot].value;
+    }
+    int slot = appFindVar(program.vars, token);
     if (slot >= 0) {
-        return String(vars[slot].value);
+        return String(program.vars[slot].value);
     }
 
     String lowered = token;
@@ -335,161 +609,466 @@ static String appStringValueOf(String token, DappVar vars[], DappStringVar strin
     if (lowered == "millis") return String(millis());
     if (lowered == "seconds") return String(millis() / 1000);
     if (lowered == "wifi") return wifiIsConnected() == 1 ? "1" : "0";
+    if (lowered == "fok") return String(dappFok);
+    if (lowered == "feof") return String(dappFeof);
+    if (lowered == "ledok") return rearLedAvailable() ? "1" : "0";
     return "";
 }
 
-static String appExpandText(String text, DappVar vars[], DappStringVar stringVars[]) {
+//shared scanner for the two expanders below: at text[i] == '$', works out how far the
+//reference runs (name, plus a [subscript] if one follows) and hands back the reference
+//text without the '$'. Returns the index to continue scanning from, or -1 if the '$' is
+//not the start of a reference and should be emitted literally.
+static int appScanReference(const String& text, int dollarIdx, String& refOut) {
+    int start = dollarIdx + 1;
+    int end = start;
+    while (end < (int)text.length() && appIsNameChar(text[end])) {
+        end++;
+    }
+    if (end == start) {
+        return -1;
+    }
+    if (end < (int)text.length() && text[end] == '[') {
+        int close = appScanSubscript(text, end);
+        if (close > 0) {
+            end = close;
+        }
+    }
+    refOut = text.substring(start, end);
+    return end;
+}
+
+static String appExpandText(String text, DappProgram& program) {
     text = stripMatchingQuotes(text);
     String out = "";
-    for (int i = 0; i < text.length(); i++) {
+    for (int i = 0; i < (int)text.length(); i++) {
         if (text[i] != '$') {
             out += text[i];
             continue;
         }
 
-        int start = i + 1;
-        int end = start;
-        while (end < text.length() && appIsNameChar(text[end])) {
-            end++;
-        }
-        if (end == start) {
+        String ref;
+        int next = appScanReference(text, i, ref);
+        if (next < 0) {
             out += '$';
             continue;
         }
-
-        String name = text.substring(start, end);
-        out += appStringValueOf(name, vars, stringVars);
-        i = end - 1;
+        out += appStringValueOf(ref, program);
+        i = next - 1;
     }
     return out;
 }
 
-//   IFEQ/IFNE's operand rule: "$name", or a bare name that matches a live variable, reads as
-//   that variable; anything else is text with $substitutions expanded.
-//
-//   The `quoted` test is near-dead in practice and kept only to stay diffable with DS: both
-//   repos' splitCommand() strips the quotes off a token before it ever gets here, so IFEQ
-//   $reply "quit" arrives as the bare word quit. It only bites if an app names a variable
-//   after a word it also wants to compare against literally -- rare, and DS has it too.
-static String appStringOperand(String token, DappVar vars[], DappStringVar stringVars[]) {
+//EXPR's expander. Same scan as appExpandText, but every reference becomes its *numeric*
+//value -- a string variable landing in the middle of an expression would only ever be a
+//syntax error, so this guarantees tinyexpr sees digits wherever the script wrote a '$'.
+static String appExpandNumericText(const String& text, DappProgram& program) {
+    String out = "";
+    for (int i = 0; i < (int)text.length(); i++) {
+        if (text[i] != '$') {
+            out += text[i];
+            continue;
+        }
+
+        String ref;
+        int next = appScanReference(text, i, ref);
+        if (next < 0) {
+            out += '$';
+            continue;
+        }
+        out += String(appValueOf(ref, program));
+        i = next - 1;
+    }
+    return out;
+}
+
+static String appStringOperand(String token, DappProgram& program) {
     token.trim();
     bool explicitVariable = token.startsWith("$");
     bool quoted = token.length() >= 2 &&
         ((token[0] == '"' && token[token.length() - 1] == '"') ||
          (token[0] == '\'' && token[token.length() - 1] == '\''));
 
-    if (explicitVariable || (!quoted && appFindStringVar(stringVars, token) >= 0) || (!quoted && appFindVar(vars, token) >= 0)) {
-        return appStringValueOf(token, vars, stringVars);
+    if (explicitVariable ||
+        (!quoted && appFindStringVar(program.stringVars, token) >= 0) ||
+        (!quoted && appFindVar(program.vars, token) >= 0)) {
+        return appStringValueOf(token, program);
     }
 
-    return appExpandText(token, vars, stringVars);
+    return appExpandText(token, program);
 }
 
-//   Fn+Q aborts a running app, matching the "this keystroke is local, get me out" chord ssh
-//   and telnet already use (readRawKeyBytes, hardware.ino).
-//
-//   Peek, don't consume -- and note what "consume" means on this keyboard. isChange() is
-//   destructive: it compares the held-key count against a latch and *updates the latch* on
-//   the call that reports true (M5Cardputer's Keyboard.cpp), so the first caller after each
-//   update() swallows the event and every later caller sees "no change". Calling it here
-//   silently ate every keystroke readKeyboard() was about to read, which looked like an INPUT
-//   prompt that wouldn't type.
-//
-//   isPressed() and keysState() have no such latch: updateKeysState() rebuilds the whole state
-//   from the currently-held keys on every M5Cardputer.update(), so this reads the live chord and
-//   leaves the change flag for readKeyboard() below. Level-triggered rather than edge-triggered,
-//   which is what you want from an abort anyway -- holding the chord cancels.
-//
-//   DS has no equivalent: it can always drop the telnet session. Here an app owns the device
-//   until it returns, so without this a WAIT loop or an INPUT prompt is only escapable by
-//   power-cycling -- which is also what made DS's 4000-step budget unsafe to port before now.
-static bool appCancelRequested() {
-    if (!M5Cardputer.Keyboard.isPressed()) {
-        return false;
+//resolves a write target -- "score" (a numeric variable, created on first use) or
+//"board[$i]" (a cell of an existing array). nullptr means the fault is already recorded.
+static long* appNumericTarget(DappProgram& program, String token) {
+    token.trim();
+    if (token.startsWith("$")) {
+        token.remove(0, 1);
     }
-    Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
-    return keys.fn && keysContainChar(keys, 'q');
+
+    String name;
+    String indexToken;
+    if (appParseSubscript(token, name, indexToken)) {
+        return appArrayCell(program, name, appValueOf(indexToken, program));
+    }
+
+    int slot = appEnsureVar(program.vars, token);
+    if (slot < 0) {
+        program.fault = "too many variables";
+        return nullptr;
+    }
+    return &program.vars[slot].value;
 }
 
-//   WAIT/SLEEP's pause. An app blocks loop(), so anything loop() would normally do has to
-//   happen here instead or it stops happening for the duration. DS pumped its FTP server,
-//   radio task and display frame; the equivalents here are the M5 device update and the two
-//   sprite redraws, so the status bar keeps ticking and a long WAIT doesn't look like a hang.
-//
-//   Returns false if the user asked to abort. Deliberately still absent: keyboardLogic().
-//   Reading the keyboard properly here would let a keystroke land in currentCommand mid-app
-//   and then get submitted the moment the app exits; appCancelRequested() only peeks.
-static bool appDelay(unsigned long waitMs) {
-    unsigned long started = millis();
-    while (millis() - started < waitMs) {
-        M5Cardputer.update();
-        if (appCancelRequested()) {
-            return false;
-        }
+//   CANVAS -- a character grid addressed by cell, drawn over the Cardputer panel.
+//   Scripts that draw a frame at a time need this:
+//   PRINT appends to a scrolling history, so a 20-row playfield redrawn with CLEAR+PRINT
+//   both flickers and walks the terminal history. The buffer lives in global.h because
+//   Arduino's generated prototypes need its cell type early.
+
+static void appCanvasClear() {
+    if (!dappCanvasCells) {
+        return;
+    }
+    for (int i = 0; i < dappCanvasCols * dappCanvasRows; i++) {
+        dappCanvasCells[i].ch = ' ';
+        dappCanvasCells[i].color = C_WHITE;
+    }
+}
+
+//Safe to call when no canvas is up. Canvas owns the full 240x135 panel while active;
+//restore the three normal shell sprites when it releases that surface.
+static void appCanvasEnd() {
+    bool wasActive = dappCanvasActive;
+    dappCanvasActive = false;
+    dappCanvasCols = 0;
+    dappCanvasRows = 0;
+    if (dappCanvasCells) {
+        heap_caps_free(dappCanvasCells);
+        dappCanvasCells = nullptr;
+    }
+
+    if (wasActive) {
+        M5Cardputer.Display.setFont(&fonts::Font0);
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextDatum(top_left);
         statusManagement();
         drawTerminalHistory();
-        ftpService();
-        maintainInternetConnection();
-        delay(1);
+        drawCommandBar(shellPrompt(), currentCommand);
     }
+}
+
+static bool appCanvasBegin(int cols, int rows) {
+    if (cols < 1 || rows < 1 || cols > DAPP_CANVAS_MAX_COLS || rows > DAPP_CANVAS_MAX_ROWS) {
+        outLine("run: CANVAS size must be 1.." + String(DAPP_CANVAS_MAX_COLS) + " by 1.." +
+                String(DAPP_CANVAS_MAX_ROWS), C_RED);
+        return false;
+    }
+
+    if (dappCanvasCells && dappCanvasCols == cols && dappCanvasRows == rows) {
+        //same geometry as the canvas already up -- reuse it rather than churning heap
+        appCanvasClear();
+        return true;
+    }
+
+    appCanvasEnd();
+    dappCanvasCells = (DappCanvasCell*)appCalloc(cols * rows, sizeof(DappCanvasCell), "dappCanvas");
+    if (!dappCanvasCells) {
+        outLine("run: not enough memory for that CANVAS", C_RED);
+        return false;
+    }
+
+    dappCanvasCols = cols;
+    dappCanvasRows = rows;
+    dappCanvasActive = true;
+    appCanvasClear();
+
+    M5Cardputer.Display.fillScreen(BLACK);
     return true;
 }
 
-//   INPUT's prompt. DS alternates its two byte sources here (telnet line editor, then the
-//   keyboard one); with the telnet server cut this collapses to the same shape as
-//   RemoteSession::runInlineCommandPrompt() -- a readKeyboard() loop over a private buffer,
-//   with everything loop() would have done pumped by hand.
+//writes `text` rightward from (col, row), clipped at the edges. Off-grid rows are dropped
+//rather than reported: a script drawing a piece that overhangs the well is doing something
+//normal, and making it check bounds first would double the size of every draw routine.
+static void appCanvasPut(int col, int row, const String& text, int color) {
+    if (!dappCanvasCells || row < 0 || row >= dappCanvasRows) {
+        return;
+    }
+    for (int i = 0; i < (int)text.length(); i++) {
+        int x = col + i;
+        if (x < 0) {
+            continue;
+        }
+        if (x >= dappCanvasCols) {
+            break;
+        }
+        DappCanvasCell& cell = dappCanvasCells[row * dappCanvasCols + x];
+        cell.ch = text[i];
+        cell.color = (uint8_t)color;
+    }
+}
+
+//Pushes the grid over the Cardputer's full panel. A 40x22 game needs the tiny
+//TomThumb font; roomier canvases retain the normal 6x8 terminal font.
+static void appCanvasFlip() {
+    if (!dappCanvasCells) {
+        return;
+    }
+
+    const int width = M5Cardputer.Display.width();
+    const int height = M5Cardputer.Display.height();
+    const int cellW = max(1, width / dappCanvasCols);
+    const int cellH = max(1, height / dappCanvasRows);
+    const int originX = (width - cellW * dappCanvasCols) / 2;
+    const int originY = (height - cellH * dappCanvasRows) / 2;
+
+    M5Cardputer.Display.startWrite();
+    M5Cardputer.Display.fillScreen(BLACK);
+    if (cellW < 6 || cellH < 8) {
+        M5Cardputer.Display.setFont(&fonts::TomThumb);
+    } else {
+        M5Cardputer.Display.setFont(&fonts::Font0);
+    }
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextDatum(middle_center);
+    char glyph[2] = { ' ', '\0' };
+    for (int row = 0; row < dappCanvasRows; row++) {
+        for (int col = 0; col < dappCanvasCols; col++) {
+            const DappCanvasCell& cell = dappCanvasCells[row * dappCanvasCols + col];
+            if (cell.ch == ' ' || cell.ch == '\0') continue;
+            glyph[0] = cell.ch;
+            M5Cardputer.Display.setTextColor(ansiCodeToPixelColor(cell.color));
+            M5Cardputer.Display.drawString(glyph,
+                originX + col * cellW + cellW / 2,
+                originY + row * cellH + cellH / 2);
+        }
+    }
+    M5Cardputer.Display.endWrite();
+}
+
+//   Files -- FOPEN/FREAD/FWRITE/FCLOSE and friends. One open handle at a time, like the
+//   one canvas: a script that genuinely needs two files open at
+//   once has outgrown this language. Error philosophy splits by kind: a file that isn't
+//   there is a fact a script can plan around, so FOPEN/FDELETE report through $fok and
+//   never stop the app -- but FREAD/FWRITE against a handle in the wrong state is a
+//   programming bug and stops it like any other.
+static File dappFile;
+static bool dappFileOpen = false;
+static bool dappFileWritable = false;
+static bool dappFileIsSd = false;
+
+static void appFileClose() {
+    if (dappFileOpen) {
+        dappFile.close();
+        dappFileOpen = false;
+    }
+    dappFileWritable = false;
+    dappFileIsSd = false;
+}
+
+//routes the unified /sd-or-flash namespace the same way `run` and the shell do, so a
+//script's paths mean what its author's shell commands mean. Missing SD reads as "can't".
+static bool appFileRoute(const String& path, RoutedPath& out) {
+    out = routePath(resolvePath(cwd, path));
+    return !(out.isSd && !sdCardMounted);
+}
+
+static void appFileOpen(const String& path, const char* fsMode, bool writable) {
+    appFileClose();
+    dappFok = 0;
+    dappFeof = 0;
+
+    RoutedPath r;
+    if (!appFileRoute(path, r)) {
+        return;
+    }
+
+    if (writable) {
+        ledPulseStorageWrite(r.isSd);
+    } else {
+        ledPulseStorageRead(r.isSd);
+    }
+    File f = r.fs->open(r.realPath, fsMode);
+    if (!f || f.isDirectory()) {
+        if (f) {
+            f.close();
+        }
+        return;
+    }
+
+    dappFile = f;
+    dappFileOpen = true;
+    dappFileWritable = writable;
+    dappFileIsSd = r.isSd;
+    dappFok = 1;
+}
+
+//one line, newline consumed, CR stripped -- the same shape appLoad reads scripts with,
+//but capped per-character so a newline-free multi-megabyte file can't balloon a String.
+static String appFileReadLine() {
+    String line = "";
+    if (!dappFile.available()) {
+        dappFeof = 1;
+        return line;
+    }
+    ledPulseStorageRead(dappFileIsSd);
+    while (dappFile.available()) {
+        char ch = (char)dappFile.read();
+        if (ch == '\n') {
+            break;
+        }
+        if (line.length() < DAPP_MAX_STRING_LEN) {
+            line += ch;
+        }
+    }
+    if (line.endsWith("\r")) {
+        line.remove(line.length() - 1);
+    }
+    return line;
+}
+
+//   KEY -- non-blocking key polling
 //
-//   Returns false if the user aborted with Fn+Q, which stops the app.
-static bool appReadInput(const String& prompt, String& out) {
-    //   Borrow and put back the command-bar globals, exactly as runInlineCommandPrompt does:
-    //   readKeyboard() and drawCommandBar() both index into them, and the shell's own cursor
-    //   position has to survive an app that prompts.
+//   INPUT blocks until Enter, which is fine for a prompt and useless for a game: gravity
+//   has to keep ticking while nothing is pressed. This decodes at most one key per call
+//   from either input source, leaving the rest queued. Each source keeps its own escape
+//   state for the same reason LineEditState does (global.h): a half-arrived arrow key on
+//   one source must not corrupt the other's parse.
+
+//The Cardputer keyboard is already decoded, so KEY reads KeysState directly rather
+//than feeding terminal escape bytes through DS's two-source decoder.
+static bool dappAbort = false;
+static long dappPendingKey = DAPP_KEY_NONE;
+
+static void appPollAbortChord() {
+    if (dappAbort || !M5Cardputer.Keyboard.isPressed()) return;
+    Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
+    if ((keys.fn && keysContainChar(keys, 'q')) ||
+        (keys.ctrl && keysContainChar(keys, 'x'))) dappAbort = true;
+}
+
+static long appTranslateKey(const Keyboard_Class::KeysState& keys) {
+    if (keys.fn) {
+        if (keysContainChar(keys, 'q')) {
+            dappAbort = true;
+            return DAPP_KEY_NONE;
+        }
+        if (keysContainChar(keys, ';') || keysContainChar(keys, ':')) return DAPP_KEY_UP;
+        if (keysContainChar(keys, '.') || keysContainChar(keys, '>')) return DAPP_KEY_DOWN;
+        if (keysContainChar(keys, ',') || keysContainChar(keys, '<')) return DAPP_KEY_LEFT;
+        if (keysContainChar(keys, '/') || keysContainChar(keys, '?')) return DAPP_KEY_RIGHT;
+        return DAPP_KEY_NONE;
+    }
+    if (keys.ctrl) {
+        if (keysContainChar(keys, 'x')) {
+            dappAbort = true;
+            return DAPP_KEY_NONE;
+        }
+        if (keysContainChar(keys, 'c') || keysContainChar(keys, 't')) return DAPP_KEY_ESC;
+        return DAPP_KEY_NONE;
+    }
+    if (keys.del) return DAPP_KEY_BACK;
+    if (keys.enter) return DAPP_KEY_ENTER;
+    if (keys.tab) return DAPP_KEY_TAB;
+    if (keys.space) return DAPP_KEY_SPACE;
+    for (char ch : keys.word) {
+        if ((uint8_t)ch >= 32 && (uint8_t)ch < 127) return (long)(uint8_t)ch;
+    }
+    return DAPP_KEY_NONE;
+}
+
+//WAIT must keep calling M5Cardputer.update(), but isChange() is edge-triggered.
+//Capture one pending key here so the next KEY opcode still sees a press that arrived
+//during the wait instead of having the servicing loop consume and forget it.
+static void appCaptureKeyEvent() {
+    if (!M5Cardputer.Keyboard.isChange() || !M5Cardputer.Keyboard.isPressed()) return;
+    Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
+    if (keyboardEventIsDebounced(keys)) return;
+    long key = appTranslateKey(keys);
+    if (key != DAPP_KEY_NONE && dappPendingKey == DAPP_KEY_NONE) dappPendingKey = key;
+}
+
+static long appPollKey() {
+    if (dappPendingKey != DAPP_KEY_NONE) {
+        long key = dappPendingKey;
+        dappPendingKey = DAPP_KEY_NONE;
+        return key;
+    }
+    M5Cardputer.update();
+    appCaptureKeyEvent();
+    long key = dappPendingKey;
+    dappPendingKey = DAPP_KEY_NONE;
+    return key;
+}
+
+static void appResetKeyState() {
+    dappAbort = false;
+    dappPendingKey = DAPP_KEY_NONE;
+}
+
+static void appDelay(unsigned long waitMs) {
+    unsigned long started = millis();
+    while (millis() - started < waitMs) {
+        M5Cardputer.update();
+        appCaptureKeyEvent();
+        if (dappAbort) return;
+        ftpService();
+        maintainInternetConnection();
+        ledService();
+        if (!dappCanvasActive) {
+            statusManagement();
+            drawTerminalHistory();
+            drawCommandBar(shellPrompt(), currentCommand);
+        }
+        delay(1);
+    }
+}
+
+static String appReadInput(const String& prompt) {
+    String input = "";
     int savedCursorPos = commandCursorPos;
     int savedScrollOffset = commandScrollOffset;
-
-    //   A private buffer, not currentCommand: a half-typed answer must not survive into the
-    //   shell's input line when the app exits.
-    String input = "";
     commandCursorPos = 0;
     commandScrollOffset = 0;
 
-    bool cancelled = false;
-    bool submitted = false;
-    while (!submitted) {
+    while (true) {
         M5Cardputer.update();
+        appPollAbortChord();
+        if (dappAbort) break;
 
-        if (appCancelRequested()) {
-            cancelled = true;
-            break;
-        }
-
-        submitted = readKeyboard(input);
-
-        statusManagement();
+        bool submitted = readKeyboard(input);
         ftpService();
         maintainInternetConnection();
-        drawTerminalHistory();
+        ledService();
+        if (!dappCanvasActive) {
+            statusManagement();
+            drawTerminalHistory();
+        }
         drawCommandBar(prompt, input);
+
+        if (submitted) {
+            input.trim();
+            outLine(prompt + input, C_CYAN);
+            break;
+        }
         delay(1);
     }
 
     commandCursorPos = savedCursorPos;
     commandScrollOffset = savedScrollOffset;
-
-    if (cancelled) {
-        return false;
-    }
-
-    input.trim();
-    outLine(prompt + input, C_CYAN);   //the command bar is transient, so echo what was answered into the scrollback
-    out = input;
-    return true;
+    return dappAbort ? String("") : input;
 }
 
-//   RAND's generator. esp_random() rather than random(): the Arduino PRNG is seeded
-//   identically every boot, so "RAND roll 1 6" would deal the same sequence to a freshly
-//   powered device every time.
+static bool appCompare(long left, const String& op, long right) {
+    if (op == "==" || op == "=") return left == right;
+    if (op == "!=" || op == "<>") return left != right;
+    if (op == ">") return left > right;
+    if (op == "<") return left < right;
+    if (op == ">=") return left >= right;
+    if (op == "<=") return left <= right;
+    return false;
+}
+
 static long appRandomRange(long low, long high) {
     if (high < low) {
         long tmp = low;
@@ -504,19 +1083,11 @@ static long appRandomRange(long low, long high) {
     return low + (long)(esp_random() % span);
 }
 
-static bool appCompare(long left, const String& op, long right) {
-    if (op == "==" || op == "=") return left == right;
-    if (op == "!=" || op == "<>") return left != right;
-    if (op == ">") return left > right;
-    if (op == "<") return left < right;
-    if (op == ">=") return left >= right;
-    if (op == "<=") return left <= right;
-    return false;
-}
-
-//reads the whole file into the line array, recording label positions as it goes so GOTO
-//can jump forward to a label it hasn't executed past yet
-static bool appLoad(File& file, DappLine lines[], int& lineCount, DappLabel labels[], int& labelCount) {
+static bool appLoad(File& file, DappProgram& program) {
+    DappLine* lines = program.lines;
+    DappLabel* labels = program.labels;
+    int& lineCount = program.lineCount;
+    int& labelCount = program.labelCount;
     lineCount = 0;
     labelCount = 0;
 
@@ -554,24 +1125,32 @@ static bool appLoad(File& file, DappLine lines[], int& lineCount, DappLabel labe
     return true;
 }
 
-static bool appExecute(DappLine lines[], int lineCount, DappLabel labels[], int labelCount) {
-    DappVar vars[DAPP_MAX_VARS] = {};
-    DappStringVar stringVars[DAPP_MAX_STRING_VARS] = {};
+static bool appExecute(DappProgram& program) {
+    DappLine* lines = program.lines;
+    DappLabel* labels = program.labels;
+    DappStringVar* stringVars = program.stringVars;
+    const int lineCount = program.lineCount;
+    const int labelCount = program.labelCount;
     int pc = 0;
-    int steps = 0;
+    long steps = 0;
     int color = C_WHITE;
 
     while (pc >= 0 && pc < lineCount) {
-        //a step budget rather than a time budget, as the backstop for a runaway loop. Fn+Q is
-        //the interactive way out, but it's only sampled where an app pauses (WAIT and INPUT --
-        //see appCancelRequested), so a tight loop with neither still needs this.
-        if (++steps > DAPP_MAX_STEPS) {
-            outLine("run: stopped after " + String(DAPP_MAX_STEPS) + " steps (possible loop)", C_RED);
+        if (dappAbort) {
+            outLine("run: aborted (Fn+Q or Ctrl+X)", C_YELLOW);
             return false;
+        }
+        if (++steps > DAPP_MAX_STEPS) {
+            outLine("run: stopped after " + String(DAPP_MAX_STEPS) + " steps without a WAIT (possible loop)", C_RED);
+            return false;
+        }
+        if (steps % DAPP_STEPS_PER_YIELD == 0) {
+            delay(0);   //hand the scheduler a slot so a long loop can't starve the watchdog
         }
 
         String line = trimCopy(lines[pc].text);
         pc++;
+        const int lineNumber = pc;   //1-based, captured before any jump moves pc
         if (isAppCommentOrBlank(line) || line.startsWith(":")) {
             continue;
         }
@@ -584,29 +1163,94 @@ static bool appExecute(DappLine lines[], int lineCount, DappLabel labels[], int 
         if (op == "LABEL") {
             continue;
         } else if (op == "PRINT" || op == "ECHO") {
-            outLine(appExpandText(arg, vars, stringVars), color);
+            outLine(appExpandText(arg, program), color);
         } else if (op == "COLOR") {
             color = appColorByName(arg);
-        } else if (op == "CLEAR" || op == "CLS") {
-            outClearScreen();
-        } else if (op == "WAIT" || op == "SLEEP") {
-            if (!appDelay((unsigned long)appValueOf(arg, vars))) {
-                outLine("run: cancelled", C_YELLOW);
+        } else if (op == "LED") {
+            String parts[3];
+            int count = splitCommand(arg, parts, 3);
+            if (count < 3) {
+                outLine("run: LED needs <red> <green> <blue>", C_RED);
                 return false;
             }
-        } else if (op == "SET") {
+            if (!rearLedAvailable()) {
+                outLine("run: LED unavailable on this build (set REAR_RGB_LED_PIN)", C_RED);
+                return false;
+            }
+            ledSetAppOverrideRgbLong(appValueOf(parts[0], program),
+                                     appValueOf(parts[1], program),
+                                     appValueOf(parts[2], program));
+        } else if (op == "CLEAR" || op == "CLS") {
+            //while a canvas is up this means "blank the grid", not "wipe the scrollback the
+            //canvas is drawn over" -- the latter would be visible only after ENDCANVAS
+            if (dappCanvasActive) {
+                appCanvasClear();
+            } else {
+                outClearScreen();
+            }
+        } else if (op == "WAIT" || op == "SLEEP") {
+            unsigned long waitMs = (unsigned long)appValueOf(arg, program);
+            appDelay(waitMs);
+            if (waitMs > 0) {
+                steps = 0;   //a paced loop isn't a runaway one -- see DAPP_MAX_STEPS
+            }
+        } else if (op == "SET" || op == "ADD" || op == "SUB" || op == "MUL" || op == "DIV" || op == "MOD") {
             String parts[2];
             int count = splitCommand(arg, parts, 2);
             if (count < 2) {
-                outLine("run: SET needs <name> <value>", C_RED);
+                outLine("run: " + op + " needs <name> <value>", C_RED);
                 return false;
             }
-            int slot = appEnsureVar(vars, parts[0]);
-            if (slot < 0) {
-                outLine("run: too many variables", C_RED);
+            long value = appValueOf(parts[1], program);
+            if ((op == "DIV" || op == "MOD") && value == 0) {
+                outLine("run: " + op + " by zero", C_RED);
                 return false;
             }
-            vars[slot].value = appValueOf(parts[1], vars);
+            long* target = appNumericTarget(program, parts[0]);
+            if (!target) {
+                continue;   //fault recorded; the check at the bottom of the loop reports it
+            }
+            if (op == "SET") *target = value;
+            else if (op == "ADD") *target += value;
+            else if (op == "SUB") *target -= value;
+            else if (op == "MUL") *target *= value;
+            else if (op == "DIV") *target /= value;
+            else *target %= value;
+        } else if (op == "EXPR") {
+            //not split with splitCommand: the expression is the whole rest of the line,
+            //spaces and all (tinyexpr skips whitespace itself), so it is taken verbatim
+            int split = arg.indexOf(' ');
+            if (split < 0) {
+                outLine("run: EXPR needs <name> <expression>", C_RED);
+                return false;
+            }
+            String targetToken = arg.substring(0, split);
+            String expression = appExpandNumericText(trimCopy(arg.substring(split + 1)), program);
+            if (program.fault.length() > 0) {
+                continue;
+            }
+
+            int err = 0;
+            double result = te_interp(expression.c_str(), &err);
+            if (err != 0) {
+                outLine("run: EXPR cannot evaluate: " + expression, C_RED);
+                return false;
+            }
+            long* target = appNumericTarget(program, targetToken);
+            if (!target) {
+                continue;
+            }
+            *target = (long)(result >= 0 ? result + 0.5 : result - 0.5);
+        } else if (op == "DIM") {
+            String parts[2];
+            int count = splitCommand(arg, parts, 2);
+            if (count < 2) {
+                outLine("run: DIM needs <name> <size>", C_RED);
+                return false;
+            }
+            if (!appDimArray(program, parts[0], appValueOf(parts[1], program))) {
+                return false;
+            }
         } else if (op == "SETSTR") {
             String parts[2];
             int count = splitCommand(arg, parts, 2);
@@ -619,7 +1263,7 @@ static bool appExecute(DappLine lines[], int lineCount, DappLabel labels[], int 
                 outLine("run: too many string variables", C_RED);
                 return false;
             }
-            appSetStringValue(stringVars, slot, appExpandText(parts[1], vars, stringVars));
+            appSetStringValue(stringVars, slot, appExpandText(parts[1], program));
         } else if (op == "APPEND") {
             String parts[2];
             int count = splitCommand(arg, parts, 2);
@@ -632,7 +1276,63 @@ static bool appExecute(DappLine lines[], int lineCount, DappLabel labels[], int 
                 outLine("run: too many string variables", C_RED);
                 return false;
             }
-            appSetStringValue(stringVars, slot, stringVars[slot].value + appExpandText(parts[1], vars, stringVars));
+            appSetStringValue(stringVars, slot, stringVars[slot].value + appExpandText(parts[1], program));
+        } else if (op == "CHR") {
+            String parts[2];
+            int count = splitCommand(arg, parts, 2);
+            if (count < 2) {
+                outLine("run: CHR needs <name> <code>", C_RED);
+                return false;
+            }
+            int slot = appEnsureStringVar(stringVars, parts[0]);
+            if (slot < 0) {
+                outLine("run: too many string variables", C_RED);
+                return false;
+            }
+            long code = appValueOf(parts[1], program);
+            appSetStringValue(stringVars, slot, (code >= 32 && code < 127) ? String((char)code) : String(" "));
+        } else if (op == "SUBSTR") {
+            String parts[4];
+            int count = splitCommand(arg, parts, 4);
+            if (count < 4) {
+                outLine("run: SUBSTR needs <name> <text> <start> <count>", C_RED);
+                return false;
+            }
+            int slot = appEnsureStringVar(stringVars, parts[0]);
+            if (slot < 0) {
+                outLine("run: too many string variables", C_RED);
+                return false;
+            }
+            String source = appStringOperand(parts[1], program);
+            long start = appValueOf(parts[2], program);
+            long want = appValueOf(parts[3], program);
+            if (start < 0) start = 0;
+            if (start > (long)source.length()) start = source.length();
+            if (want < 0) want = 0;
+            long end = start + want;
+            if (end > (long)source.length()) end = source.length();
+            appSetStringValue(stringVars, slot, source.substring(start, end));
+        } else if (op == "LEN" || op == "CHARAT") {
+            String parts[3];
+            int count = splitCommand(arg, parts, 3);
+            int needed = (op == "LEN") ? 2 : 3;
+            if (count < needed) {
+                outLine("run: " + op + (op == "LEN" ? " needs <name> <text>" : " needs <name> <text> <index>"), C_RED);
+                return false;
+            }
+            String source = appStringOperand(parts[1], program);
+            long value = 0;
+            if (op == "LEN") {
+                value = source.length();
+            } else {
+                long index = appValueOf(parts[2], program);
+                value = (index >= 0 && index < (long)source.length()) ? (long)(uint8_t)source[index] : 0;
+            }
+            long* target = appNumericTarget(program, parts[0]);
+            if (!target) {
+                continue;
+            }
+            *target = value;
         } else if (op == "INPUT") {
             String parts[2];
             int count = splitCommand(arg, parts, 2);
@@ -645,26 +1345,135 @@ static bool appExecute(DappLine lines[], int lineCount, DappLabel labels[], int 
                 outLine("run: too many string variables", C_RED);
                 return false;
             }
-            String prompt = count >= 2 ? appExpandText(parts[1], vars, stringVars) : parts[0] + "> ";
-            String reply;
-            if (!appReadInput(prompt, reply)) {
-                outLine("run: cancelled", C_YELLOW);
+            String prompt = count >= 2 ? appExpandText(parts[1], program) : parts[0] + "> ";
+            appSetStringValue(stringVars, slot, appReadInput(prompt));
+            steps = 0;   //waiting on a human is not a runaway loop
+        } else if (op == "KEY") {
+            if (arg.length() == 0) {
+                outLine("run: KEY needs <name>", C_RED);
                 return false;
             }
-            appSetStringValue(stringVars, slot, reply);
-        } else if (op == "ADD") {
+            long key = appPollKey();
+            long* target = appNumericTarget(program, arg);
+            if (!target) {
+                continue;
+            }
+            *target = key;
+        } else if (op == "CANVAS") {
             String parts[2];
             int count = splitCommand(arg, parts, 2);
             if (count < 2) {
-                outLine("run: ADD needs <name> <value>", C_RED);
+                outLine("run: CANVAS needs <cols> <rows>", C_RED);
                 return false;
             }
-            int slot = appEnsureVar(vars, parts[0]);
+            if (!appCanvasBegin((int)appValueOf(parts[0], program), (int)appValueOf(parts[1], program))) {
+                return false;
+            }
+        } else if (op == "ENDCANVAS") {
+            appCanvasEnd();
+        } else if (op == "PUT") {
+            String parts[3];
+            int count = splitCommand(arg, parts, 3);
+            if (count < 3) {
+                outLine("run: PUT needs <col> <row> <text>", C_RED);
+                return false;
+            }
+            if (!dappCanvasActive) {
+                outLine("run: PUT needs a CANVAS first", C_RED);
+                return false;
+            }
+            appCanvasPut((int)appValueOf(parts[0], program),
+                         (int)appValueOf(parts[1], program),
+                         appExpandText(parts[2], program),
+                         color);
+        } else if (op == "FLIP") {
+            if (!dappCanvasActive) {
+                outLine("run: FLIP needs a CANVAS first", C_RED);
+                return false;
+            }
+            appCanvasFlip();
+        } else if (op == "FOPEN") {
+            String parts[2];
+            int count = splitCommand(arg, parts, 2);
+            if (count < 2) {
+                outLine("run: FOPEN needs <path> read|write|append", C_RED);
+                return false;
+            }
+            String mode = parts[1];
+            mode.toLowerCase();
+            const char* fsMode;
+            bool writable;
+            if (mode == "read" || mode == "r") { fsMode = "r"; writable = false; }
+            else if (mode == "write" || mode == "w") { fsMode = "w"; writable = true; }
+            else if (mode == "append" || mode == "a") { fsMode = "a"; writable = true; }
+            else {
+                outLine("run: FOPEN mode must be read, write, or append", C_RED);
+                return false;
+            }
+            appFileOpen(appExpandText(parts[0], program), fsMode, writable);
+        } else if (op == "FCLOSE") {
+            appFileClose();
+        } else if (op == "FREAD") {
+            if (arg.length() == 0) {
+                outLine("run: FREAD needs <name>", C_RED);
+                return false;
+            }
+            if (!dappFileOpen || dappFileWritable) {
+                outLine("run: FREAD needs a file FOPENed for read", C_RED);
+                return false;
+            }
+            int slot = appEnsureStringVar(stringVars, arg);
             if (slot < 0) {
-                outLine("run: too many variables", C_RED);
+                outLine("run: too many string variables", C_RED);
                 return false;
             }
-            vars[slot].value += appValueOf(parts[1], vars);
+            appSetStringValue(stringVars, slot, appFileReadLine());
+        } else if (op == "FWRITE") {
+            if (!dappFileOpen || !dappFileWritable) {
+                outLine("run: FWRITE needs a file FOPENed for write or append", C_RED);
+                return false;
+            }
+            String text = appExpandText(arg, program);
+            ledPulseStorageWrite(dappFileIsSd);
+            size_t wrote = dappFile.print(text);
+            wrote += dappFile.print("\n");
+            if (wrote != text.length() + 1) {
+                outLine("run: FWRITE failed (filesystem full?)", C_RED);
+                return false;
+            }
+        } else if (op == "FEXISTS") {
+            String parts[2];
+            int count = splitCommand(arg, parts, 2);
+            if (count < 2) {
+                outLine("run: FEXISTS needs <name> <path>", C_RED);
+                return false;
+            }
+            RoutedPath r;
+            long exists = 0;
+            if (appFileRoute(appExpandText(parts[1], program), r)) {
+                ledPulseStorageRead(r.isSd);
+                if (r.fs->exists(r.realPath)) {
+                    exists = 1;
+                }
+            }
+            long* target = appNumericTarget(program, parts[0]);
+            if (!target) {
+                continue;
+            }
+            *target = exists;
+        } else if (op == "FDELETE") {
+            if (arg.length() == 0) {
+                outLine("run: FDELETE needs <path>", C_RED);
+                return false;
+            }
+            RoutedPath r;
+            dappFok = 0;
+            if (appFileRoute(appExpandText(arg, program), r)) {
+                ledPulseStorageWrite(r.isSd);
+                if (r.fs->remove(r.realPath)) {
+                    dappFok = 1;
+                }
+            }
         } else if (op == "RAND") {
             String parts[3];
             int count = splitCommand(arg, parts, 3);
@@ -672,22 +1481,24 @@ static bool appExecute(DappLine lines[], int lineCount, DappLabel labels[], int 
                 outLine("run: RAND needs <name> <max> or <name> <min> <max>", C_RED);
                 return false;
             }
-            int slot = appEnsureVar(vars, parts[0]);
-            if (slot < 0) {
-                outLine("run: too many variables", C_RED);
-                return false;
-            }
 
+            long value = 0;
             if (count == 2) {
-                long maxExclusive = appValueOf(parts[1], vars);
+                long maxExclusive = appValueOf(parts[1], program);
                 if (maxExclusive <= 0) {
                     outLine("run: RAND max must be greater than 0", C_RED);
                     return false;
                 }
-                vars[slot].value = appRandomRange(0, maxExclusive - 1);
+                value = appRandomRange(0, maxExclusive - 1);
             } else {
-                vars[slot].value = appRandomRange(appValueOf(parts[1], vars), appValueOf(parts[2], vars));
+                value = appRandomRange(appValueOf(parts[1], program), appValueOf(parts[2], program));
             }
+
+            long* target = appNumericTarget(program, parts[0]);
+            if (!target) {
+                continue;
+            }
+            *target = value;
         } else if (op == "GOTO") {
             int target = appFindLabel(labels, labelCount, arg);
             if (target < 0) {
@@ -695,20 +1506,47 @@ static bool appExecute(DappLine lines[], int lineCount, DappLabel labels[], int 
                 return false;
             }
             pc = target;
+        } else if (op == "GOSUB") {
+            int target = appFindLabel(labels, labelCount, arg);
+            if (target < 0) {
+                outLine("run: label not found: " + arg, C_RED);
+                return false;
+            }
+            if (program.callDepth >= DAPP_MAX_CALL_DEPTH) {
+                outLine("run: GOSUB nested deeper than " + String(DAPP_MAX_CALL_DEPTH) +
+                        " (a RETURN is probably missing)", C_RED);
+                return false;
+            }
+            //pc has already advanced past the GOSUB, so this is where RETURN resumes
+            program.callStack[program.callDepth++] = pc;
+            pc = target;
+        } else if (op == "RETURN") {
+            if (program.callDepth <= 0) {
+                outLine("run: RETURN without GOSUB", C_RED);
+                return false;
+            }
+            pc = program.callStack[--program.callDepth];
         } else if (op == "IF") {
             String parts[5];
             int count = splitCommand(arg, parts, 5);
             String jumpOp = (count >= 4) ? parts[3] : "";
             jumpOp.toUpperCase();
-            if (count < 5 || jumpOp != "GOTO") {
-                outLine("run: IF syntax is IF <left> <op> <right> GOTO <label>", C_RED);
+            if (count < 5 || (jumpOp != "GOTO" && jumpOp != "GOSUB")) {
+                outLine("run: IF syntax is IF <left> <op> <right> GOTO|GOSUB <label>", C_RED);
                 return false;
             }
-            if (appCompare(appValueOf(parts[0], vars), parts[1], appValueOf(parts[2], vars))) {
+            if (appCompare(appValueOf(parts[0], program), parts[1], appValueOf(parts[2], program))) {
                 int target = appFindLabel(labels, labelCount, parts[4]);
                 if (target < 0) {
                     outLine("run: label not found: " + parts[4], C_RED);
                     return false;
+                }
+                if (jumpOp == "GOSUB") {
+                    if (program.callDepth >= DAPP_MAX_CALL_DEPTH) {
+                        outLine("run: GOSUB nested deeper than " + String(DAPP_MAX_CALL_DEPTH), C_RED);
+                        return false;
+                    }
+                    program.callStack[program.callDepth++] = pc;
                 }
                 pc = target;
             }
@@ -717,16 +1555,23 @@ static bool appExecute(DappLine lines[], int lineCount, DappLabel labels[], int 
             int count = splitCommand(arg, parts, 4);
             String jumpOp = (count >= 3) ? parts[2] : "";
             jumpOp.toUpperCase();
-            if (count < 4 || jumpOp != "GOTO") {
-                outLine("run: " + op + " syntax is " + op + " <left> <right> GOTO <label>", C_RED);
+            if (count < 4 || (jumpOp != "GOTO" && jumpOp != "GOSUB")) {
+                outLine("run: " + op + " syntax is " + op + " <left> <right> GOTO|GOSUB <label>", C_RED);
                 return false;
             }
-            bool equal = appStringOperand(parts[0], vars, stringVars) == appStringOperand(parts[1], vars, stringVars);
+            bool equal = appStringOperand(parts[0], program) == appStringOperand(parts[1], program);
             if ((op == "IFEQ" && equal) || (op == "IFNE" && !equal)) {
                 int target = appFindLabel(labels, labelCount, parts[3]);
                 if (target < 0) {
                     outLine("run: label not found: " + parts[3], C_RED);
                     return false;
+                }
+                if (jumpOp == "GOSUB") {
+                    if (program.callDepth >= DAPP_MAX_CALL_DEPTH) {
+                        outLine("run: GOSUB nested deeper than " + String(DAPP_MAX_CALL_DEPTH), C_RED);
+                        return false;
+                    }
+                    program.callStack[program.callDepth++] = pc;
                 }
                 pc = target;
             }
@@ -734,6 +1579,13 @@ static bool appExecute(DappLine lines[], int lineCount, DappLabel labels[], int 
             return true;
         } else {
             outLine("run: unknown app command: " + op, C_RED);
+            return false;
+        }
+
+        //single check for every helper that can only report failure out of band -- an
+        //out-of-range array index, or running out of variable slots mid-expression
+        if (program.fault.length() > 0) {
+            outLine("run: " + program.fault + " (line " + String(lineNumber) + ")", C_RED);
             return false;
         }
     }
@@ -744,7 +1596,7 @@ static bool appExecute(DappLine lines[], int lineCount, DappLabel labels[], int 
 void handleRunCommand(const String parts[], int partCount) {
     if (partCount < 2) {
         outLine("Usage: run <app|path.dapp>");
-        outLine("Put apps in /sd/apps or /apps, then run <name>.");
+        outLine("Upload apps to /sd/apps over FTP, then run <name>.");
         return;
     }
 
@@ -756,24 +1608,33 @@ void handleRunCommand(const String parts[], int partCount) {
         return;
     }
 
-    //   static, not stack. DS declares these as locals, but 160 DappLine + 32 DappLabel is
-    //   ~3.2KB of String headers in one frame, and the Arduino loopTask only gets 8KB total
-    //   (CONFIG_ARDUINO_LOOP_STACK_SIZE) -- which this is already several frames deep into.
-    //   In .bss it costs the same 3.2KB always instead of risking a stack overflow, and the
-    //   Strings sit empty between runs so nothing is held on the heap. Safe because "run"
-    //   is not re-entrant: there is no RUN opcode, so an app can't launch another app.
-    static DappLine lines[DAPP_MAX_LINES];
-    static DappLabel labels[DAPP_MAX_LABELS];
-    int lineCount = 0;
-    int labelCount = 0;
-
-    outLine("Running " + resolved, C_GREEN);
-    bool loaded = appLoad(file, lines, lineCount, labels, labelCount);
-    file.close();
-    if (!loaded) {
+    DappProgram program;
+    if (!program.alloc()) {
+        file.close();
+        outLine("run: not enough memory to load the app", C_RED);
         return;
     }
 
-    bool ok = appExecute(lines, lineCount, labels, labelCount);
+    outLine("Running " + resolved, C_GREEN);
+    ledPulseStorageRead(resolved.startsWith("/sd/"));
+    bool loaded = appLoad(file, program);
+    file.close();
+    if (!loaded) {
+        ledClearAppOverride();
+        return;
+    }
+
+    //stale bytes from before the app started would arrive as its first keypresses
+    appResetKeyState();
+    dappFok = 0;
+    dappFeof = 0;
+
+    bool ok = appExecute(program);
+
+    //unconditional: an app that faulted mid-frame still has to hand the terminal back,
+    //and one that stopped mid-read must not leave a dangling handle
+    appCanvasEnd();
+    appFileClose();
+    ledClearAppOverride();
     outLine(ok ? "[app exited]" : "[app stopped]", ok ? C_GREEN : C_RED);
 }

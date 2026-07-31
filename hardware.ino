@@ -28,7 +28,7 @@ static uint32_t keyboardEventSignature(const Keyboard_Class::KeysState& keys) {
     return signature;
 }
 
-static bool keyboardEventIsDebounced(const Keyboard_Class::KeysState& keys) {
+bool keyboardEventIsDebounced(const Keyboard_Class::KeysState& keys) {
     unsigned long now = millis();
     uint32_t signature = keyboardEventSignature(keys);
 

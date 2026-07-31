@@ -4,7 +4,7 @@
 
 #include <Arduino.h>
 #if !SOC_USB_OTG_SUPPORTED || ARDUINO_USB_MODE
-#error This board's USB Mode must be set to "USB-OTG (TinyUSB)" for USB Mass Storage support
+#error This board USB Mode must be set to "USB-OTG (TinyUSB)" for USB Mass Storage support
 #else
 
 #include <USB.h>
