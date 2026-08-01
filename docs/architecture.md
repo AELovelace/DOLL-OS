@@ -98,6 +98,10 @@ It also provides the `ls` command, which can list either LittleFS or SD paths.
 
 `usb_msc.ino` exposes the SD card to a connected host over TinyUSB MSC. This mode is intentionally modal and blocking: once enabled, the device stays in USB-storage mode until the user presses `Fn + \``.
 
+### Bluetooth Keyboard
+
+`BluetoothKeyboard.ino` exposes the Cardputer as a BLE HID keyboard using the local `ESP32BLECombo`/`NimBLE-Arduino` libraries. The `btkbd` command starts a modal forwarding loop, advertises as `DOLL-OS Keyboard` by default, sends decoded Cardputer HID keys to the paired host, maps the existing `Fn+;`/`Fn+.`/`Fn+,`/`Fn+/` chords to arrow keys, and exits with `Fn+Q`.
+
 ### Motoko MQTT Client
 
 `motoko.ino` launches a modal MQTT chat session over the existing terminal UI. It reuses the normal terminal history and keyboard input path instead of introducing a second UI stack.
@@ -114,16 +118,39 @@ It also provides the `ls` command, which can list either LittleFS or SD paths.
 
 The current shell commands are:
 
+- `alias`
+- `apps`
+- `battery`
+- `btkbd`
+- `calc`
+- `cat`
+- `cd`
 - `help`
 - `clear`
+- `cp`
+- `dapper`
+- `del`
+- `dice`
+- `edit`
+- `free`
+- `ftp`
 - `wifi`
 - `ip`
 - `ls`
+- `mkdir`
 - `usb`
+- `mv`
 - `ping`
+- `pwd`
 - `motoko`
+- `reboot`
+- `rm`
+- `run`
 - `ssh`
+- `status`
 - `telnet`
+- `unalias`
+- `uptime`
 
 Grouped commands already follow a subcommand pattern, especially `wifi` and `ip`. That is the clearest existing extension point for future features.
 
@@ -155,6 +182,7 @@ Grouped commands already follow a subcommand pattern, especially `wifi` and `ip`
 - `ip.ino`: IP info, ping sweep, ARP scan
 - `ping.ino`: direct ping command
 - `usb_msc.ino`: USB mass-storage mode backed by SD
+- `BluetoothKeyboard.ino`: modal BLE HID keyboard mode
 - `motoko.ino`: modal MQTT chat client
 - `ssh.ino`: modal SSH client (`SshShellSession`)
 - `telnet.ino`: modal telnet client (`TelnetSession`)
@@ -169,6 +197,8 @@ The architecture currently relies on these platform or library layers:
 - `LittleFS`
 - `SD` and `SPI`
 - `USB` and `USBMSC`
+- `ESP32BLECombo`
+- `NimBLE-Arduino`
 - `ESP32Ping`
 - `esp32ARP`
 - `PubSubClient`

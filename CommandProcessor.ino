@@ -105,10 +105,11 @@ struct CommandEntry {
 };
 
 void helpCommandHandler(const String parts[], int partCount) {
-    outLine("Commands: alias, apps, battery, calc, cat, cd, clear, cp,");
-    outLine("          dapper, del, dice, edit, free, ftp, help, ip,");
-    outLine("          ls, mkdir, motoko, mv, ping, pwd, reboot, rm,");
-    outLine("          run, ssh, status, telnet, unalias, uptime, usb, wifi");
+    outLine("Commands: alias, apps, battery, btkbd, calc, cat, cd,");
+    outLine("          clear, cp, dapper, del, dice, edit, free, ftp,");
+    outLine("          help, ip, ls, mkdir, motoko, mv, ping, pwd,");
+    outLine("          reboot, rm, run, ssh, status, telnet, unalias,");
+    outLine("          uptime, usb, wifi");
 }
 
 //reboots the board. Nothing is flushed first because nothing here is buffered --
@@ -156,6 +157,7 @@ static const CommandEntry commandTable[] = {
     { "alias",  handleAliasCommand },
     { "apps",   handleAppsCommand },
     { "battery", handleBatteryCommand },
+    { "btkbd",  handleBluetoothKeyboardCommand },
     { "calc",   handleCalcCommand },
     { "cat",    handleCatCommand },
     { "cd",     handleCdCommand },

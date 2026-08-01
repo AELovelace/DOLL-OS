@@ -109,13 +109,25 @@ test("current repository sources validate", async () => {
   // and the shape of each record instead, plus the apps that must not vanish.
   const ids = result.records.map((record) => record.id);
   assert.deepEqual(ids, [...ids].sort((left, right) => left.localeCompare(right, "en")));
-  for (const id of ["2048", "adventure", "beacon", "decide", "lamp", "mines", "notes", "sheet", "simon", "snake", "sysmon", "tetris"]) {
+  const universalIds = ["2048", "adventure", "beacon", "decide", "lamp", "mines", "notes", "sheet", "simon", "snake", "sysmon", "tetris"];
+  for (const id of universalIds) {
     assert.ok(ids.includes(id), `${id} is published`);
   }
   for (const record of result.records) {
-    assert.ok(record.boards.includes("m5cardputer"), `${record.id} supports this firmware's board`);
-    assert.ok(record.boards.includes("fnk0104"), `${record.id} remains portable to FNK0104`);
+    assert.ok(record.boards.length > 0, `${record.id} supports at least one board`);
     assert.match(record.sha256, /^[a-f0-9]{64}$/);
+  }
+
+  for (const id of universalIds) {
+    const record = result.records.find((candidate) => candidate.id === id);
+    assert.ok(record.boards.includes("m5cardputer"), `${id} supports this firmware's board`);
+    assert.ok(record.boards.includes("fnk0104"), `${id} remains portable to FNK0104`);
+  }
+
+  for (const id of ["habits", "morse", "passwords"]) {
+    const record = result.records.find((candidate) => candidate.id === id);
+    assert.ok(record, `${id} is published`);
+    assert.deepEqual(record.boards, ["m5cardputer"], `${id} is intentionally Cardputer-only`);
   }
 
   const universal = result.records.find((record) => record.id === "decide");
@@ -134,7 +146,10 @@ test("FNK0104 compatibility contract matches sibling AppRunner when available", 
     }
     throw error;
   }
-  assert.deepEqual(sourceOpcodes(source), resolvedRuntimeOpcodes(compatibility, "1.3.0"));
+  assert.deepEqual(
+    sourceOpcodes(source),
+    resolvedRuntimeOpcodes(compatibility, compatibility.boards.fnk0104.runtime),
+  );
   assertLimitsMatch(source, compatibility.boards.fnk0104.limits, {
     DAPP_MAX_LINES: "lines",
     DAPP_MAX_LABELS: "labels",
@@ -153,7 +168,10 @@ test("FNK0104 compatibility contract matches sibling AppRunner when available", 
 test("M5Cardputer compatibility contract matches AppRunner source", async () => {
   const source = await readFile(path.join(projectRoot, "AppRunner.ino"), "utf8");
   const compatibility = JSON.parse(await readFile(projectCompatibility, "utf8"));
-  assert.deepEqual(sourceOpcodes(source), resolvedRuntimeOpcodes(compatibility, "1.3.0"));
+  assert.deepEqual(
+    sourceOpcodes(source),
+    resolvedRuntimeOpcodes(compatibility, compatibility.boards.m5cardputer.runtime),
+  );
   assertLimitsMatch(source, compatibility.boards.m5cardputer.limits, {
     DAPP_MAX_LINES: "lines",
     DAPP_MAX_LABELS: "labels",

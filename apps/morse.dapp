@@ -186,7 +186,8 @@ MUL divisor 2
 SUB shift 1
 GOTO powloop
 :powdone
-EXPR digit $value / $divisor
+SET digit $value
+DIV digit $divisor
 MOD digit 2
 IF $digit = 1 GOTO dash
 APPEND code "."

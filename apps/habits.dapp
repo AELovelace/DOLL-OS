@@ -116,7 +116,7 @@ IF $col >= 7 GOTO nextrow
 EXPR idx $row * 7 + $col
 EXPR x 11 + $col * 3
 IF $col = $day GOTO drawselected
-COLOR gray
+COLOR blue
 GOTO drawmark
 :drawselected
 COLOR yellow

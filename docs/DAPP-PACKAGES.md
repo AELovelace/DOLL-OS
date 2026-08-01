@@ -85,11 +85,12 @@ The initial version assignments are:
 | Firmware family | Board ID | Initial AppRunner API |
 | --- | --- | --- |
 | M5Cardputer DOLL-OS | `m5cardputer` | `1.3.0` |
-| Freenove FNK0104 DOLL-OS | `fnk0104` | `1.3.0` |
+| Freenove FNK0104 DOLL-OS | `fnk0104` | `1.4.0` |
 
 These assignments describe the checked-in implementations summarized in
-section 4. Both implementations contain the complete `1.0.0` command set plus
-the `1.1.0`, `1.2.0`, and `1.3.0` extensions; their resource limits differ.
+section 4. Both contain the extensions through `1.3.0`; FNK0104 additionally
+implements the DS-only `1.4.0` file, HTTP, and waveform operations. Their
+resource limits also differ.
 
 ## 2. Board identity
 
@@ -191,9 +192,10 @@ information from source so it cannot quietly drift.
 | `1.1.0` | `CANVAS`, `CHARAT`, `CHR`, `DIM`, `DIV`, `ENDCANVAS`, `EXPR`, `FCLOSE`, `FDELETE`, `FEXISTS`, `FLIP`, `FOPEN`, `FREAD`, `FWRITE`, `GOSUB`, `KEY`, `LEN`, `MOD`, `MUL`, `PUT`, `RETURN`, `SUB`, `SUBSTR` |
 | `1.2.0` | *(no new opcodes; pre-LED package boundary)* |
 | `1.3.0` | `LED` |
+| `1.4.0` | `FREADB`, `FSEEK`, `FSIZE`, `FTELL`, `FWRITEB`, `HEX`, `HTTPGET`, `WAVE`, `WAVESTOP` |
 
 Aliases are included as opcodes because they are accepted directly by the
-interpreter. AppRunner 1.3.0 is a strict opcode superset of 1.2.0.
+interpreter. Each listed runtime inherits the complete opcode set above it.
 
 AppRunner 1.1.0 also extends `IF`, `IFEQ`, and `IFNE` so their taken branch may
 use `GOSUB` as well as `GOTO`. A validator must check opcode syntax and not only
@@ -206,6 +208,7 @@ the first word of each line.
 | `1.0.0` | `$battery`, `$heap`, `$millis`, `$seconds`, `$wifi` | `$battery`, `$cwd`, `$heap`, `$ip`, `$millis`, `$seconds`, `$wifi` |
 | `1.1.0` additions | `$feof`, `$fok`, `$kup`, `$kdown`, `$kleft`, `$kright`, `$kenter`, `$kesc`, `$kback`, `$ktab`, `$kspace` | `$feof`, `$fok` |
 | `1.3.0` additions | `$ledok` | `$ledok` |
+| `1.4.0` additions | `$audiook`, `$httpcode`, `$httplen`, `$httpok`, `$httptruncated` | `$audiook`, `$httpcode`, `$httplen`, `$httpok`, `$httptruncated` |
 
 The named key values are numeric-only and deliberately expand to empty text when
 printed as strings.

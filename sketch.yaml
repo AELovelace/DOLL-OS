@@ -32,6 +32,8 @@ profiles:
       # translation unit via FtpServerKey.h, so the two projects cannot share one
       # copy. See libraries/SimpleFTPServer/FtpServerKey.h.
       - dir: libraries/SimpleFTPServer
+      - dir: ../libraries/ESP32BLECombo
+      - dir: ../libraries/NimBLE-Arduino
       - dir: ../libraries/M5Cardputer
       - dir: ../libraries/M5Unified
       - dir: ../libraries/M5GFX

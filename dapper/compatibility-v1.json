@@ -89,6 +89,27 @@
       "builtins": [
         "ledok"
       ]
+    },
+    "1.4.0": {
+      "extends": "1.3.0",
+      "opcodes": [
+        "FREADB",
+        "FSEEK",
+        "FSIZE",
+        "FTELL",
+        "FWRITEB",
+        "HEX",
+        "HTTPGET",
+        "WAVE",
+        "WAVESTOP"
+      ],
+      "builtins": [
+        "audiook",
+        "httpcode",
+        "httplen",
+        "httpok",
+        "httptruncated"
+      ]
     }
   },
   "boards": {
@@ -109,7 +130,7 @@
       }
     },
     "fnk0104": {
-      "runtime": "1.3.0",
+      "runtime": "1.4.0",
       "limits": {
         "lines": 4000,
         "labels": 256,
